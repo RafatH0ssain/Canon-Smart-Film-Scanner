@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Canon Smart Film Scan</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <header>
+    <h1>Canon Smart Film Scan</h1>
+    <div class="status" id="status-chip" data-state="off">Disconnected</div>
+    <button id="connect" class="primary">Connect</button>
+  </header>
+
+  <main>
+    <section class="viewer" id="viewer">
+      <img id="preview" alt="Live view from the camera" hidden>
+      <div class="placeholder" id="placeholder">
+        <p>Not connected.</p>
+        <p class="hint">Start the mock camera with
+          <code>python -m csfs.mock.mock_server</code>, or point
+          <code>camera.base_url</code> at your camera, then press Connect.</p>
+      </div>
+      <div class="loupe-hint" id="loupe-hint" hidden>Click the image to move the loupe</div>
+    </section>
+
+    <aside class="panel">
+      <div class="group">
+        <h2>Preview</h2>
+        <label class="row">
+          <input type="checkbox" id="invert" checked>
+          <span>Invert to positive</span>
+        </label>
+        <p class="note" id="invert-note">
+          v0.1 uses a plain linear inversion. Good for black &amp; white;
+          colour negatives will look cyan until the proper colour pipeline lands
+          in v0.3.
+        </p>
+      </div>
+
+      <div class="group">
+        <h2>Focus</h2>
+        <label class="row">
+          <input type="checkbox" id="loupe">
+          <span>Magnified loupe</span>
+        </label>
+        <label class="row stacked">
+          <span>Software zoom <output id="zoom-value">4.0&times;</output></span>
+          <input type="range" id="zoom" min="1" max="12" step="0.5" value="4">
+        </label>
+
+        <div id="camera-zoom-block" hidden>
+          <label class="row stacked">
+            <span>Camera zoom</span>
+            <div class="segmented" id="camera-zoom">
+              <button data-value="1" class="active">1&times;</button>
+              <button data-value="5">5&times;</button>
+              <button data-value="10">10&times;</button>
+            </div>
+          </label>
+          <p class="note">
+            Camera zoom shows real sensor detail. Software zoom only enlarges
+            pixels the camera already discarded &mdash; use camera zoom first.
+          </p>
+        </div>
+      </div>
+
+      <div class="group">
+        <h2>Capture</h2>
+        <button id="capture" class="primary big" disabled>
+          Capture <kbd>Space</kbd>
+        </button>
+        <dl class="facts">
+          <dt>Settle delay</dt><dd id="settle">&mdash;</dd>
+          <dt>Shutter</dt><dd id="shutter-mode">&mdash;</dd>
+          <dt>Saving to</dt><dd id="output-dir" class="path">&mdash;</dd>
+        </dl>
+        <div id="capture-status" class="capture-status" hidden></div>
+      </div>
+
+      <div class="group">
+        <h2>Camera</h2>
+        <dl class="facts" id="settings"></dl>
+      </div>
+
+      <div class="group">
+        <h2>Downloaded</h2>
+        <ul class="captures" id="captures"><li class="empty">Nothing yet.</li></ul>
+      </div>
+    </aside>
+  </main>
+
+  <div id="toast" class="toast" hidden></div>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>

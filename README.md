@@ -4,8 +4,8 @@ Digitize film negatives with a Canon camera on a copy stand — focusing, framin
 
 Built on [CCAPI](https://developercommunity.usa.canon.com/), Canon's official Camera Control API. Works with black-and-white **and** colour negatives.
 
-> **Status: early development (v0.1 in progress).**
-> The camera-free mock and the CCAPI discovery layer work today, calibrated against Canon's CCAPI Reference v1.4.0. Live view, remote shutter, and inversion are being built on top. **No real camera has confirmed any of it yet.** See [ROADMAP.md](ROADMAP.md).
+> **Status: v0.1 works against the mock camera.**
+> Live view, magnified focus loupe, electronic shutter with settle delay, invert toggle, and auto-download are all working, calibrated against Canon's CCAPI Reference v1.4.0. **No real camera has confirmed any of it yet.** See [ROADMAP.md](ROADMAP.md).
 
 ---
 
@@ -43,25 +43,44 @@ pip install -r requirements.txt
 pip install -e .
 ```
 
-Start the mock camera:
+Start the mock camera in one terminal:
 
 ```bash
 python -m csfs.mock.mock_server
 ```
 
-In a second terminal, ask it what it can do:
+Start the app in a second:
+
+```bash
+python -m csfs.app.server
+```
+
+Open <http://127.0.0.1:8000>, press **Connect**, and you'll get a live view of a synthetic film negative — orange mask, film rebate, grain and all. Press **Capture** and a full-resolution file downloads to `captures/`.
+
+To see what the camera reports it can do:
 
 ```bash
 python -m csfs.tools.dump_endpoints
 ```
-
-You should see a list of API versions and resolved capabilities. That is the whole connection pipeline working.
 
 Run the tests (they start their own mock; nothing else needs to be running):
 
 ```bash
 pytest
 ```
+
+### Using the app
+
+| Control | Keyboard | What it does |
+|---|---|---|
+| Invert | <kbd>I</kbd> | Show a positive instead of a negative |
+| Loupe | <kbd>L</kbd> | Magnify a region to judge grain focus. Click the image to move it |
+| Camera zoom | — | 1× / 5× / 10× **on the camera**. Prefer this over software zoom |
+| Capture | <kbd>Space</kbd> | Settle, fire, download |
+
+**Use camera zoom before software zoom.** Camera-side magnification returns real sensor detail; the software loupe can only enlarge pixels the camera already discarded when it downscaled the live-view stream. Both help, but they are not equivalent.
+
+> **Colour negatives look cyan in v0.1.** The invert toggle is a plain linear flip, which is genuinely useful for black & white but leaves colour film with the inverse of its orange mask. Neutralising that mask properly is [v0.3](ROADMAP.md#v03--inversion-done-properly-bw-and-color) and needs a real pipeline, not a tweak. Your captured files are unaffected — inversion is preview-only for now, and the original is always kept.
 
 > **Python version note:** use **3.10–3.13**. `opencv-python` wheels lag new Python releases, and on 3.14 pip may try to build OpenCV from source, which is a bad time on any platform.
 
@@ -130,9 +149,19 @@ src/csfs/
 │   ├── client.py        HTTP transport + error translation
 │   ├── discovery.py     Ask the camera what it supports
 │   ├── endpoints.py     The ONLY place path assumptions live
-│   └── errors.py        Errors that name the real-world cause
+│   ├── errors.py        Errors that name the real-world cause
+│   ├── liveview.py      Stream transports + frame parsers
+│   ├── shutter.py       Electronic shutter + settle delay
+│   ├── settings.py      Read/write settings by ability
+│   └── contents.py      List and download captures
 ├── processing/      Pure functions over numpy arrays. No network, no UI.
+│   ├── invert.py        Negative → positive (v0.1: linear)
+│   ├── loupe.py         Magnified focus view
+│   └── codec.py         JPEG encode/decode
 ├── app/             The local web server that wires it together
+│   ├── server.py        HTTP API + MJPEG preview
+│   ├── session.py       Camera session + live-view frame pump
+│   └── static/          The browser UI (no build step)
 ├── mock/            A fake camera, so development needs no hardware
 └── tools/           Setup and diagnostic commands
 tests/               Runs entirely without a camera

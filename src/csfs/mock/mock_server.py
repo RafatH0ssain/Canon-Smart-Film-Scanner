@@ -10,19 +10,27 @@ features it needs.
 
 WHAT THIS IS AND IS NOT
 -----------------------
-This server defines its *own* endpoint paths. They are shaped to be plausible,
-but they are not transcribed from Canon's reference and are not authoritative --
+The request and response shapes here were calibrated against Canon's CCAPI
+Reference v1.4.0 on 2026-08-02, but this file contains none of Canon's text --
 that document is licensed per-developer and cannot live in this repository.
 
-That is deliberately safe, because the client never assumes a path: it reads the
-endpoint list this server publishes, exactly as it reads the list a real camera
-publishes (see ``csfs.ccapi.discovery``). The mock therefore exercises the real
-discovery path rather than papering over it. If a real body names things
-differently, discovery adapts and only ``csfs/ccapi/endpoints.py`` may need a
-hint added.
+The mock is not authoritative and no real body has confirmed it. That is safe,
+because the client never assumes a path: it reads the endpoint inventory this
+server publishes, exactly as it reads the inventory a real camera publishes (see
+``csfs.ccapi.discovery``). The mock therefore exercises the real discovery path
+rather than papering over it.
 
-It models the parts of a camera that matter for scanning: live view, shutter
-with a settle delay, focus position, and a card holding captured files.
+It models the parts of a camera that matter for scanning, including several
+things that only bite in practice:
+
+  - **Two API versions**, with the newer one exposing capabilities the older
+    lacks, so capability detection is genuinely exercised.
+  - **Live view is started by choosing an output size**, not by a bare "start",
+    and is stopped by setting that size back to off.
+  - **Auto power-off**, because a sleeping camera looks exactly like a wiring
+    fault, and scanning a roll involves long idle stretches.
+  - **Camera-side live-view zoom**, which returns real sensor detail rather than
+    enlarged pixels.
 """
 
 from __future__ import annotations
@@ -30,27 +38,39 @@ from __future__ import annotations
 import argparse
 import asyncio
 import math
+import struct
 import time
 from dataclasses import dataclass, field
 from typing import Any, AsyncIterator
 
 import cv2
 import numpy as np
-from fastapi import FastAPI, HTTPException, Response
+from fastapi import APIRouter, FastAPI, HTTPException, Request, Response
 from fastapi.responses import JSONResponse, StreamingResponse
 
 from csfs.mock.frames import make_negative
 
 API_ROOT = "/ccapi"
+
+# Two versions, because real bodies publish several and the client must choose
+# sensibly between duplicate listings of the same capability.
+VER_OLD = "ver100"
 VER = "ver110"
+BASE_OLD = f"{API_ROOT}/{VER_OLD}"
 BASE = f"{API_ROOT}/{VER}"
 
 # Live-view frame rate. Real bodies deliver roughly this over a good link, and
 # matching it keeps the UI's latency behaviour honest during development.
 LIVEVIEW_FPS = 15
 
-# Boundary token for the multipart MJPEG stream.
-_BOUNDARY = "csfsmockframe"
+# CCAPI's multipart live-view stream uses a boundary token literally named
+# "boundary". Matching it keeps the client's parser honest.
+_BOUNDARY = "boundary"
+
+# Live-view output sizes CCAPI accepts. "medium" is the largest on offer, and
+# "off" is how live view is stopped -- there is no DELETE for it.
+_LIVEVIEW_SIZES = ("off", "small", "medium")
+_LIVEVIEW_PIXELS = {"small": (640, 424), "medium": (960, 640)}
 
 
 @dataclass
@@ -66,7 +86,9 @@ class CapturedFile:
 class MockCameraState:
     """Everything the fake camera remembers between requests."""
 
-    liveview_active: bool = False
+    # "off" means live view is not running; otherwise this is the output size.
+    liveview_size: str = "off"
+    cameradisplay: str = "keep"
     color_film: bool = True
 
     # Focus position in arbitrary steps. 0 is perfectly sharp; the magnitude
@@ -74,9 +96,18 @@ class MockCameraState:
     # and the sharpness metric responds -- which is the point of v0.2.
     focus_position: int = 0
 
-    # "electronic" or "mechanical". v0.1 must select electronic to avoid
-    # shutter shock on the copy stand.
-    shutter_mode: str = "electronic"
+    # One of elec_1st_curtain / mechanical / electronic. Defaults to the
+    # mechanical-tinged option deliberately, so code that forgets to select
+    # "electronic" produces a visibly wrong default rather than working by
+    # accident.
+    shutter_mode: str = "elec_1st_curtain"
+
+    # Camera-side live-view magnification: "1", "5" or "10".
+    lv_zoom: str = "1"
+
+    auto_power_off: str = "1min"
+    lens_mounted: bool = True
+    lens_name: str = "RF100mm F2.8 L MACRO IS USM (mock)"
 
     iso: str = "100"
     av: str = "8.0"
@@ -86,13 +117,29 @@ class MockCameraState:
     files: list[CapturedFile] = field(default_factory=list)
     shutter_count: int = 0
 
+    @property
+    def liveview_active(self) -> bool:
+        """Whether live view is currently producing frames."""
+        return self.liveview_size != "off"
+
     def focus_error(self) -> float:
-        """Blur radius implied by the current focus position."""
-        return abs(self.focus_position) / 4.0
+        """Blur radius implied by the current focus position.
+
+        Camera-side zoom divides the visible blur, because magnifying real
+        sensor detail is what makes misfocus obvious -- the whole reason the
+        loupe should prefer camera zoom over enlarging pixels on the PC.
+        """
+        return abs(self.focus_position) / 4.0 / float(self.lv_zoom)
 
 
 state = MockCameraState()
 app = FastAPI(title="Mock CCAPI Camera", docs_url="/__docs")
+
+# Endpoints every API version offers.
+router = APIRouter()
+# Endpoints only the newer API version offers, so that capability detection has
+# something real to detect.
+modern_router = APIRouter()
 
 
 def _encode_jpeg(frame: np.ndarray, quality: int = 85) -> bytes:
@@ -103,6 +150,20 @@ def _encode_jpeg(frame: np.ndarray, quality: int = 85) -> bytes:
     return buffer.tobytes()
 
 
+def _version_prefix(request: Request) -> str:
+    """The ``/ccapi/verXXX`` prefix the caller actually used.
+
+    Content listings must hand back URLs under the same version the client is
+    talking, since the stored-file layout differs between versions on real
+    bodies.
+    """
+    parts = request.url.path.split("/")
+    # parts == ["", "ccapi", "verXXX", ...]
+    if len(parts) >= 3 and parts[1] == "ccapi":
+        return f"/{parts[1]}/{parts[2]}"
+    return BASE
+
+
 def _liveview_frame() -> np.ndarray:
     """Render the current live-view frame.
 
@@ -110,9 +171,10 @@ def _liveview_frame() -> np.ndarray:
     that: the loupe in the UI must magnify a genuinely limited source, otherwise
     focus confirmation would look better in development than it does in reality.
     """
+    width, height = _LIVEVIEW_PIXELS.get(state.liveview_size, _LIVEVIEW_PIXELS["medium"])
     return make_negative(
-        width=960,
-        height=640,
+        width=width,
+        height=height,
         color=state.color_film,
         phase=time.time() % (2 * math.pi),
         focus_error=state.focus_error(),
@@ -120,52 +182,75 @@ def _liveview_frame() -> np.ndarray:
     )
 
 
+def _require_liveview() -> None:
+    """Reject a frame request when live view has not been started.
+
+    A real body answers 503 here, and code that forgets to start the session
+    should fail in development rather than at the copy stand.
+    """
+    if not state.liveview_active:
+        raise HTTPException(status_code=503, detail={"message": "Live view not started"})
+
+
 # ---------------------------------------------------------------------------
 # Discovery
 # ---------------------------------------------------------------------------
 
 
+def _endpoint(path: str, get: bool = False, post: bool = False,
+              put: bool = False, delete: bool = False) -> dict[str, Any]:
+    """One entry in the endpoint inventory, in CCAPI's reported shape."""
+    return {"path": path, "get": get, "post": post, "put": put, "delete": delete}
+
+
+def _endpoints_for(base: str, *, modern: bool) -> list[dict[str, Any]]:
+    """The endpoint inventory for one API version."""
+    entries = [
+        _endpoint(f"{base}/deviceinformation", get=True),
+        _endpoint(f"{base}/devicestatus/storage", get=True),
+        _endpoint(f"{base}/devicestatus/battery", get=True),
+        _endpoint(f"{base}/devicestatus/lens", get=True),
+        _endpoint(f"{base}/devicestatus/temperature", get=True),
+        _endpoint(f"{base}/shooting/liveview", post=True),
+        _endpoint(f"{base}/shooting/liveview/flip", get=True),
+        _endpoint(f"{base}/shooting/liveview/multipart", get=True, delete=True),
+        _endpoint(f"{base}/shooting/liveview/scroll", get=True),
+        _endpoint(f"{base}/shooting/control/shutterbutton", post=True),
+        _endpoint(f"{base}/shooting/control/shutterbutton/manual", post=True),
+        _endpoint(f"{base}/shooting/control/drivefocus", post=True),
+        _endpoint(f"{base}/shooting/control/af", post=True),
+        _endpoint(f"{base}/shooting/settings", get=True),
+        _endpoint(f"{base}/shooting/settings/iso", get=True, put=True),
+        _endpoint(f"{base}/shooting/settings/av", get=True, put=True),
+        _endpoint(f"{base}/shooting/settings/tv", get=True, put=True),
+        _endpoint(f"{base}/shooting/settings/wb", get=True, put=True),
+        _endpoint(f"{base}/functions/autopoweroff", get=True, put=True),
+        _endpoint(f"{base}/event/polling", get=True),
+        _endpoint(f"{base}/contents", get=True),
+    ]
+    if modern:
+        entries += [
+            _endpoint(f"{base}/shooting/settings/shuttermode", get=True, put=True),
+            _endpoint(f"{base}/shooting/settings/lvzoom", get=True, put=True),
+        ]
+    return entries
+
+
 @app.get(API_ROOT + "/")
 @app.get(API_ROOT)
-def api_root() -> dict[str, str]:
-    """List supported API versions, keyed by version name."""
-    return {VER: f"{BASE}/"}
+def api_root() -> dict[str, list[dict[str, Any]]]:
+    """List every supported API version and its full endpoint inventory.
 
-
-def _endpoint(path: str, **methods: bool) -> dict[str, Any]:
-    entry: dict[str, Any] = {"path": path}
-    entry.update({k: v for k, v in methods.items()})
-    return entry
-
-
-@app.get(BASE + "/")
-@app.get(BASE)
-def version_root() -> dict[str, list[dict[str, Any]]]:
-    """List the endpoints this version supports.
-
-    This is what makes the API self-describing, and what lets the client work
-    across bodies that expose different subsets.
+    This single response is what makes CCAPI self-describing: the client reads
+    it and never has to assume a path.
     """
     return {
-        "deviceinformation": [_endpoint(f"{BASE}/deviceinformation", get=True)],
-        "storage": [_endpoint(f"{BASE}/devicestatus/storage", get=True)],
-        "battery": [_endpoint(f"{BASE}/devicestatus/battery", get=True)],
-        "liveview": [_endpoint(f"{BASE}/shooting/liveview", get=True, post=True, delete=True)],
-        "liveviewflip": [_endpoint(f"{BASE}/shooting/liveview/flip", get=True)],
-        "liveviewscroll": [_endpoint(f"{BASE}/shooting/liveview/scroll", get=True)],
-        "shutterbutton": [_endpoint(f"{BASE}/shooting/control/shutterbutton", post=True)],
-        "drivefocus": [_endpoint(f"{BASE}/shooting/control/drivefocus", post=True)],
-        "shootingsettings": [_endpoint(f"{BASE}/shooting/settings", get=True)],
-        "iso": [_endpoint(f"{BASE}/shooting/settings/iso", get=True, put=True)],
-        "av": [_endpoint(f"{BASE}/shooting/settings/av", get=True, put=True)],
-        "tv": [_endpoint(f"{BASE}/shooting/settings/tv", get=True, put=True)],
-        "wb": [_endpoint(f"{BASE}/shooting/settings/wb", get=True, put=True)],
-        "shuttermode": [_endpoint(f"{BASE}/shooting/settings/shuttermode", get=True, put=True)],
-        "contents": [_endpoint(f"{BASE}/contents", get=True)],
+        VER_OLD: _endpoints_for(BASE_OLD, modern=False),
+        VER: _endpoints_for(BASE, modern=True),
     }
 
 
-@app.get(BASE + "/deviceinformation")
+@router.get("/deviceinformation")
 def device_information() -> dict[str, str]:
     """Identify the camera. Values are obviously fake on purpose."""
     return {
@@ -178,7 +263,7 @@ def device_information() -> dict[str, str]:
     }
 
 
-@app.get(BASE + "/devicestatus/storage")
+@router.get("/devicestatus/storage")
 def storage() -> dict[str, Any]:
     return {
         "storagelist": [
@@ -193,9 +278,25 @@ def storage() -> dict[str, Any]:
     }
 
 
-@app.get(BASE + "/devicestatus/battery")
+@router.get("/devicestatus/battery")
 def battery() -> dict[str, str]:
     return {"name": "LP-E6NH (mock)", "kind": "battery", "level": "full", "quality": "good"}
+
+
+@router.get("/devicestatus/lens")
+def lens() -> dict[str, Any]:
+    """Report the mounted lens.
+
+    Note this says nothing about whether the lens can autofocus -- CCAPI does
+    not report that. Manual-lens detection has to come from whether the focus
+    endpoint exists and actually responds.
+    """
+    return {"mount": state.lens_mounted, "name": state.lens_name if state.lens_mounted else ""}
+
+
+@router.get("/devicestatus/temperature")
+def temperature() -> dict[str, str]:
+    return {"status": "normal"}
 
 
 # ---------------------------------------------------------------------------
@@ -203,66 +304,97 @@ def battery() -> dict[str, str]:
 # ---------------------------------------------------------------------------
 
 
-@app.post(BASE + "/shooting/liveview")
-def liveview_start(payload: dict[str, Any] | None = None) -> dict[str, str]:
-    """Start a live-view session."""
-    state.liveview_active = True
-    return {"message": "ok"}
+@router.post("/shooting/liveview")
+def liveview_settings(payload: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Configure live-view output.
 
+    ``{"liveviewsize": "off"|"small"|"medium", "cameradisplay": "on"|"off"|"keep"}``
 
-@app.delete(BASE + "/shooting/liveview")
-def liveview_stop() -> dict[str, str]:
-    """Stop the live-view session and free the camera."""
-    state.liveview_active = False
-    return {"message": "ok"}
-
-
-@app.get(BASE + "/shooting/liveview")
-def liveview_status() -> dict[str, Any]:
-    return {"active": state.liveview_active, "fps": LIVEVIEW_FPS}
-
-
-@app.get(BASE + "/shooting/liveview/flip")
-def liveview_flip() -> Response:
-    """Return exactly one live-view frame as a JPEG.
-
-    Rejects the request when live view is not running, because a real body does
-    too -- and code that forgets to start the session should fail in development
-    rather than at the copy stand.
+    There is no separate start/stop: choosing a size starts it, and "off" stops
+    it.
     """
-    if not state.liveview_active:
+    payload = payload or {}
+    size = str(payload.get("liveviewsize", "medium"))
+    if size not in _LIVEVIEW_SIZES:
         raise HTTPException(
-            status_code=503,
-            detail="Live view is not running. POST to the liveview endpoint first.",
+            status_code=400,
+            detail={"message": f"Invalid parameter: liveviewsize must be one of {_LIVEVIEW_SIZES}"},
         )
+    display = str(payload.get("cameradisplay", "keep"))
+    if display not in ("on", "off", "keep"):
+        raise HTTPException(
+            status_code=400,
+            detail={"message": "Invalid parameter: cameradisplay must be on, off or keep"},
+        )
+    state.liveview_size = size
+    state.cameradisplay = display
+    return {}
+
+
+@router.get("/shooting/liveview/flip")
+def liveview_flip() -> Response:
+    """Return exactly one live-view frame as a JPEG."""
+    _require_liveview()
     return Response(content=_encode_jpeg(_liveview_frame()), media_type="image/jpeg")
 
 
-async def _mjpeg_frames() -> AsyncIterator[bytes]:
-    """Yield multipart MJPEG chunks until the client disconnects."""
+async def _multipart_frames() -> AsyncIterator[bytes]:
+    """Yield multipart MJPEG chunks until live view stops or the client leaves."""
     interval = 1.0 / LIVEVIEW_FPS
     while state.liveview_active:
         jpeg = await asyncio.to_thread(lambda: _encode_jpeg(_liveview_frame()))
         yield (
-            f"--{_BOUNDARY}\r\n"
-            f"Content-Type: image/jpeg\r\n"
-            f"Content-Length: {len(jpeg)}\r\n\r\n"
-        ).encode("ascii") + jpeg + b"\r\n"
+            f"--{_BOUNDARY}\n"
+            f"Content-Type: image/jpeg\n"
+            f"Content-Length: {len(jpeg)}\n\n"
+        ).encode("ascii") + jpeg + b"\n"
+        await asyncio.sleep(interval)
+    yield f"--{_BOUNDARY}--\n".encode("ascii")
+
+
+@router.get("/shooting/liveview/multipart")
+def liveview_multipart() -> StreamingResponse:
+    """Continuous live view as standard multipart MJPEG.
+
+    Preferred over the ``scroll`` variant: it is an ordinary format that needs
+    no custom parser.
+    """
+    _require_liveview()
+    return StreamingResponse(
+        _multipart_frames(),
+        media_type=f"multipart/x-mixed-replace;boundary={_BOUNDARY}",
+    )
+
+
+@router.delete("/shooting/liveview/multipart")
+def liveview_multipart_stop() -> dict[str, Any]:
+    """Stop the multipart stream without changing the live-view size."""
+    return {}
+
+
+async def _scroll_frames() -> AsyncIterator[bytes]:
+    """Yield live-view frames in CCAPI's own binary framing.
+
+    Each frame is a header (marker, data-type, 4-byte length), then the JPEG,
+    then an end marker.
+
+    UNVERIFIED: the byte order of the 4-byte length is not something this
+    project has confirmed against a real body, which is one reason the multipart
+    endpoint is preferred. If you ever need this path, check it against your
+    reference first.
+    """
+    interval = 1.0 / LIVEVIEW_FPS
+    while state.liveview_active:
+        jpeg = await asyncio.to_thread(lambda: _encode_jpeg(_liveview_frame()))
+        yield b"\xff\x00\x00" + struct.pack(">I", len(jpeg)) + jpeg + b"\xff\xff"
         await asyncio.sleep(interval)
 
 
-@app.get(BASE + "/shooting/liveview/scroll")
+@router.get("/shooting/liveview/scroll")
 def liveview_scroll() -> StreamingResponse:
-    """Continuous MJPEG live-view stream."""
-    if not state.liveview_active:
-        raise HTTPException(
-            status_code=503,
-            detail="Live view is not running. POST to the liveview endpoint first.",
-        )
-    return StreamingResponse(
-        _mjpeg_frames(),
-        media_type=f"multipart/x-mixed-replace; boundary={_BOUNDARY}",
-    )
+    """Continuous live view in Canon's binary chunk framing."""
+    _require_liveview()
+    return StreamingResponse(_scroll_frames(), media_type="image/octet-stream")
 
 
 # ---------------------------------------------------------------------------
@@ -270,18 +402,21 @@ def liveview_scroll() -> StreamingResponse:
 # ---------------------------------------------------------------------------
 
 
-@app.post(BASE + "/shooting/control/shutterbutton")
+@router.post("/shooting/control/shutterbutton")
 def shutter_button(payload: dict[str, Any] | None = None) -> JSONResponse:
-    """Fire the shutter and write a file to the fake card.
+    """Fire the shutter and write a file to the fake card. ``{"af": bool}``.
 
     The captured frame is rendered at a higher resolution than live view and
     with finer grain, mirroring the real gap between the preview stream and the
     file you actually scan from.
     """
     payload = payload or {}
-    if payload.get("af") is True:
-        # Autofocus on grain is unreliable; the app should not be requesting it.
-        # Nudging focus here makes that mistake visible in the preview.
+    af = payload.get("af", False)
+    if not isinstance(af, bool):
+        raise HTTPException(status_code=400, detail={"message": "Invalid parameter"})
+    if af:
+        # Autofocus on film grain is unreliable and can hunt. Nudging focus here
+        # makes that mistake visible in the preview rather than silent.
         state.focus_position += 1
 
     frame = make_negative(
@@ -289,82 +424,161 @@ def shutter_button(payload: dict[str, Any] | None = None) -> JSONResponse:
         height=1600,
         color=state.color_film,
         phase=time.time() % (2 * math.pi),
-        focus_error=state.focus_error(),
+        focus_error=abs(state.focus_position) / 4.0,
         grain=0.012,
         seed=state.shutter_count,
     )
     state.shutter_count += 1
     name = f"IMG_{state.shutter_count:04d}.JPG"
     state.files.append(CapturedFile(name=name, data=_encode_jpeg(frame, quality=92)))
-    return JSONResponse({"message": "ok", "name": name, "path": f"{BASE}/contents/card1/100CANON/{name}"})
+    return JSONResponse({})
 
 
-@app.post(BASE + "/shooting/control/drivefocus")
+@router.post("/shooting/control/shutterbutton/manual")
+def shutter_button_manual(payload: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Half/full press control: ``{"action": ..., "af": bool}``."""
+    payload = payload or {}
+    action = str(payload.get("action", ""))
+    if action not in ("release", "half_press", "full_press"):
+        raise HTTPException(status_code=400, detail={"message": "Invalid parameter"})
+    if action == "full_press":
+        shutter_button({"af": bool(payload.get("af", False))})
+    return {}
+
+
+@router.post("/shooting/control/af")
+def af_control(payload: dict[str, Any] | None = None) -> dict[str, Any]:
+    return {}
+
+
+@router.post("/shooting/control/drivefocus")
 def drive_focus(payload: dict[str, Any] | None = None) -> dict[str, Any]:
     """Step focus. ``{"direction": "near"|"far", "steps": int}``.
 
     A real AF lens has finite travel, so the position is clamped: code that
-    assumes it can always step further needs to handle the limit.
+    assumes it can always step further needs to handle the limit. A manual lens
+    cannot be driven at all, which the mock simulates when no lens is mounted.
     """
     payload = payload or {}
+    if not state.lens_mounted:
+        raise HTTPException(
+            status_code=503, detail={"message": "Device busy: focus cannot be driven"}
+        )
     direction = str(payload.get("direction", "near")).lower()
     if direction not in {"near", "far"}:
-        raise HTTPException(status_code=400, detail="direction must be 'near' or 'far'")
+        raise HTTPException(status_code=400, detail={"message": "Invalid parameter: direction"})
     try:
         steps = int(payload.get("steps", 1))
     except (TypeError, ValueError):
-        raise HTTPException(status_code=400, detail="steps must be an integer") from None
+        raise HTTPException(
+            status_code=400, detail={"message": "Invalid parameter: steps"}
+        ) from None
 
     delta = steps if direction == "far" else -steps
     state.focus_position = max(-40, min(40, state.focus_position + delta))
-    return {"message": "ok", "position": state.focus_position}
+    return {"position": state.focus_position}
 
 
 # ---------------------------------------------------------------------------
 # Settings
 # ---------------------------------------------------------------------------
 
-
-@app.get(BASE + "/shooting/settings")
-def shooting_settings() -> dict[str, Any]:
-    return {
-        "iso": {"value": state.iso, "ability": ["100", "200", "400", "800", "1600"]},
-        "av": {"value": state.av, "ability": ["2.8", "4.0", "5.6", "8.0", "11", "16"]},
-        "tv": {"value": state.tv, "ability": ["1/30", "1/60", "1/125", "1/250", "1/500"]},
-        "wb": {"value": state.white_balance, "ability": ["auto", "daylight", "tungsten"]},
-        "shuttermode": {"value": state.shutter_mode, "ability": ["electronic", "mechanical"]},
-    }
-
-
-_SETTING_FIELDS = {
+# setting name -> (state attribute, selectable values)
+_COMMON_SETTINGS = {
     "iso": ("iso", ["100", "200", "400", "800", "1600"]),
     "av": ("av", ["2.8", "4.0", "5.6", "8.0", "11", "16"]),
     "tv": ("tv", ["1/30", "1/60", "1/125", "1/250", "1/500"]),
-    "wb": ("white_balance", ["auto", "daylight", "tungsten"]),
-    "shuttermode": ("shutter_mode", ["electronic", "mechanical"]),
+    "wb": ("wb", ["auto", "daylight", "tungsten"]),
 }
+_MODERN_SETTINGS = {
+    "shuttermode": ("shutter_mode", ["elec_1st_curtain", "mechanical", "electronic"]),
+    "lvzoom": ("lv_zoom", ["1", "5", "10"]),
+}
+# The mock's attribute name differs from the API name for a couple of settings.
+_ATTR_OVERRIDES = {"wb": "white_balance"}
 
 
-@app.get(BASE + "/shooting/settings/{setting}")
+def _setting_spec(setting: str, allow_modern: bool) -> tuple[str, list[str]]:
+    table = dict(_COMMON_SETTINGS)
+    if allow_modern:
+        table.update(_MODERN_SETTINGS)
+    if setting not in table:
+        raise HTTPException(status_code=404, detail={"message": f"Unknown setting '{setting}'"})
+    attr, ability = table[setting]
+    return _ATTR_OVERRIDES.get(setting, attr), ability
+
+
+@router.get("/shooting/settings")
+def shooting_settings() -> dict[str, Any]:
+    """All shooting settings in one response, each as {value, ability}."""
+    out: dict[str, Any] = {}
+    for name, (attr, ability) in {**_COMMON_SETTINGS, **_MODERN_SETTINGS}.items():
+        out[name] = {"value": getattr(state, _ATTR_OVERRIDES.get(name, attr)), "ability": ability}
+    return out
+
+
+@router.get("/shooting/settings/{setting}")
 def get_setting(setting: str) -> dict[str, Any]:
-    if setting not in _SETTING_FIELDS:
-        raise HTTPException(status_code=404, detail=f"Unknown setting '{setting}'")
-    attr, ability = _SETTING_FIELDS[setting]
+    attr, ability = _setting_spec(setting, allow_modern=False)
     return {"value": getattr(state, attr), "ability": ability}
 
 
-@app.put(BASE + "/shooting/settings/{setting}")
+@router.put("/shooting/settings/{setting}")
 def put_setting(setting: str, payload: dict[str, Any]) -> dict[str, Any]:
-    if setting not in _SETTING_FIELDS:
-        raise HTTPException(status_code=404, detail=f"Unknown setting '{setting}'")
-    attr, ability = _SETTING_FIELDS[setting]
+    attr, ability = _setting_spec(setting, allow_modern=False)
+    return _apply_setting(attr, ability, payload)
+
+
+@modern_router.get("/shooting/settings/{setting}")
+def get_setting_modern(setting: str) -> dict[str, Any]:
+    attr, ability = _setting_spec(setting, allow_modern=True)
+    return {"value": getattr(state, attr), "ability": ability}
+
+
+@modern_router.put("/shooting/settings/{setting}")
+def put_setting_modern(setting: str, payload: dict[str, Any]) -> dict[str, Any]:
+    attr, ability = _setting_spec(setting, allow_modern=True)
+    return _apply_setting(attr, ability, payload)
+
+
+def _apply_setting(attr: str, ability: list[str], payload: dict[str, Any]) -> dict[str, Any]:
     value = str(payload.get("value", ""))
     if value not in ability:
         raise HTTPException(
-            status_code=400, detail=f"'{value}' is not settable; allowed: {ability}"
+            status_code=400,
+            detail={"message": f"Invalid parameter: '{value}' not in {ability}"},
         )
     setattr(state, attr, value)
-    return {"message": "ok", "value": value}
+    return {}
+
+
+@router.get("/functions/autopoweroff")
+def get_auto_power_off() -> dict[str, Any]:
+    return {
+        "value": state.auto_power_off,
+        "ability": ["disable", "1min", "2min", "4min", "8min", "15min"],
+    }
+
+
+@router.put("/functions/autopoweroff")
+def put_auto_power_off(payload: dict[str, Any]) -> dict[str, Any]:
+    """Disabling this is what stops the camera sleeping mid-roll."""
+    value = str(payload.get("value", ""))
+    if value not in ("disable", "1min", "2min", "4min", "8min", "15min"):
+        raise HTTPException(status_code=400, detail={"message": "Invalid parameter"})
+    state.auto_power_off = value
+    return {}
+
+
+@router.get("/event/polling")
+def event_polling() -> dict[str, Any]:
+    """Report state changes since the last poll.
+
+    Real bodies use this to announce that a capture has been written, which is
+    more reliable than sleeping for a guessed interval after the shutter.
+    """
+    latest = state.files[-1].name if state.files else None
+    return {"addedcontents": [latest] if latest else []}
 
 
 # ---------------------------------------------------------------------------
@@ -372,31 +586,45 @@ def put_setting(setting: str, payload: dict[str, Any]) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 
-@app.get(BASE + "/contents")
-def contents_root() -> dict[str, list[str]]:
-    return {"path": [f"{BASE}/contents/card1/100CANON"]}
+@router.get("/contents")
+def contents_root(request: Request) -> dict[str, list[str]]:
+    return {"path": [f"{_version_prefix(request)}/contents/card1"]}
 
 
-@app.get(BASE + "/contents/card1/100CANON")
-def contents_list() -> dict[str, list[str]]:
-    return {"path": [f"{BASE}/contents/card1/100CANON/{f.name}" for f in state.files]}
+@router.get("/contents/card1")
+def contents_card(request: Request) -> dict[str, list[str]]:
+    return {"path": [f"{_version_prefix(request)}/contents/card1/100CANON"]}
 
 
-@app.get(BASE + "/contents/card1/100CANON/{name}")
+@router.get("/contents/card1/100CANON")
+def contents_list(request: Request) -> dict[str, list[str]]:
+    prefix = _version_prefix(request)
+    return {"path": [f"{prefix}/contents/card1/100CANON/{f.name}" for f in state.files]}
+
+
+@router.get("/contents/card1/100CANON/{name}")
 def contents_download(name: str) -> Response:
     for f in state.files:
         if f.name == name:
             return Response(content=f.data, media_type="image/jpeg")
-    raise HTTPException(status_code=404, detail=f"No file named '{name}' on the mock card.")
+    raise HTTPException(status_code=404, detail={"message": f"Not found: '{name}'"})
 
 
-@app.delete(BASE + "/contents/card1/100CANON/{name}")
-def contents_delete(name: str) -> dict[str, str]:
+@router.delete("/contents/card1/100CANON/{name}")
+def contents_delete(name: str) -> dict[str, Any]:
     for i, f in enumerate(state.files):
         if f.name == name:
             del state.files[i]
-            return {"message": "ok"}
-    raise HTTPException(status_code=404, detail=f"No file named '{name}' on the mock card.")
+            return {}
+    raise HTTPException(status_code=404, detail={"message": f"Not found: '{name}'"})
+
+
+# Mount the shared routes under both versions, and the newer-only routes under
+# the newer version alone. Order matters: the modern router must be included
+# first so its more specific settings handler wins for that prefix.
+app.include_router(modern_router, prefix=BASE)
+app.include_router(router, prefix=BASE)
+app.include_router(router, prefix=BASE_OLD)
 
 
 # ---------------------------------------------------------------------------
@@ -412,6 +640,13 @@ def set_film_type(payload: dict[str, Any]) -> dict[str, Any]:
         raise HTTPException(status_code=400, detail="mode must be 'color' or 'bw'")
     state.color_film = mode == "color"
     return {"message": "ok", "mode": mode}
+
+
+@app.post("/__mock/lens")
+def set_lens(payload: dict[str, Any]) -> dict[str, Any]:
+    """Attach or detach the lens, to exercise the manual-lens fallback."""
+    state.lens_mounted = bool(payload.get("mounted", True))
+    return {"message": "ok", "mounted": state.lens_mounted}
 
 
 @app.post("/__mock/reset")
@@ -437,7 +672,7 @@ def main() -> None:
     host = args.host or config.mock.host
     port = args.port or config.mock.port
 
-    print(f"Mock CCAPI camera listening on http://{host}:{port}{API_ROOT}/")
+    print(f"Mock CCAPI camera listening on http://{host}:{port}{API_ROOT}")
     print("Point camera.base_url at that address (minus the /ccapi path).")
     uvicorn.run(app, host=host, port=port, log_level="info")
 

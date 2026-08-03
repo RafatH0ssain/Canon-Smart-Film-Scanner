@@ -5,7 +5,7 @@ Digitize film negatives with a Canon camera on a copy stand — focusing, framin
 Built on [CCAPI](https://developercommunity.usa.canon.com/), Canon's official Camera Control API. Works with black-and-white **and** colour negatives.
 
 > **Status: early development (v0.1 in progress).**
-> The camera-free mock and the CCAPI discovery layer work today. Live view, remote shutter, and inversion are being built on top. See [ROADMAP.md](ROADMAP.md).
+> The camera-free mock and the CCAPI discovery layer work today, calibrated against Canon's CCAPI Reference v1.4.0. Live view, remote shutter, and inversion are being built on top. **No real camera has confirmed any of it yet.** See [ROADMAP.md](ROADMAP.md).
 
 ---
 
@@ -98,9 +98,13 @@ python -m csfs.tools.dump_endpoints
 
 ### If your camera names things differently
 
-This project never hardcodes CCAPI paths — it reads the endpoint list the camera itself publishes and matches it against hints in [`src/csfs/ccapi/endpoints.py`](src/csfs/ccapi/endpoints.py). That's the **only** file containing path assumptions.
+This project never hardcodes CCAPI paths — it reads the endpoint inventory the camera itself publishes and matches it against hints in [`src/csfs/ccapi/endpoints.py`](src/csfs/ccapi/endpoints.py). That's the **only** file containing path assumptions. Canon's own reference recommends this approach, since the available URLs vary by model and firmware.
 
 If `dump_endpoints` reports a capability as MISSING that your reference says your camera has, add the distinguishing path segment to the hints in that file. Everything else adapts automatically.
+
+Hints match on **whole path segments**, never loose substrings — a capability bound to the wrong endpoint fails in ways that are very hard to diagnose, so an honest MISSING is preferred.
+
+Please don't paste Canon's reference text into issues or PRs. The path *your camera reports* is fine to share; Canon's documentation of it is not.
 
 ---
 

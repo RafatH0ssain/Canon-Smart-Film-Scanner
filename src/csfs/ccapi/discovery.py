@@ -20,7 +20,7 @@ works across API versions and cannot silently mis-parse into a wrong path.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Iterable
+from typing import Any, Iterable, Mapping
 
 from csfs.ccapi.client import CCAPIClient
 from csfs.ccapi.endpoints import ROOT_PATH_CANDIDATES, hints_for
@@ -128,44 +128,104 @@ def _walk_paths(obj: Any, version: str, out: dict[str, Endpoint]) -> None:
         out[obj] = Endpoint(obj, frozenset(), version)
 
 
-def _extract_versions(obj: Any) -> dict[str, str]:
-    """Pull ``{version_name: version_root_path}`` out of the API root response."""
-    versions: dict[str, str] = {}
-    if isinstance(obj, dict):
-        for key, value in obj.items():
-            if isinstance(value, str) and value.startswith("/"):
-                versions[str(key)] = value
-            elif isinstance(value, dict):
-                # e.g. {"ver100": {"path": "/ccapi/ver100/"}}
-                nested = value.get("path") or value.get("url")
-                if isinstance(nested, str) and nested.startswith("/"):
-                    versions[str(key)] = nested
-    return versions
+def _extract_versions(obj: Any) -> tuple[dict[str, str], dict[str, Any]]:
+    """Pull the version listing out of the API root response.
+
+    CCAPI's root returns each supported version mapped to an *array* of endpoint
+    objects -- the whole endpoint inventory arrives in this one response, so no
+    follow-up request is normally needed::
+
+        {"ver100": [{"path": "...", "get": true, ...}, ...], "ver110": [...]}
+
+    Two other shapes are also accepted, because a version root given as a bare
+    path is a cheap thing to support and costs one extra request if it ever
+    appears.
+
+    Returns:
+        ``(paths, inline)`` where ``paths`` maps a version to a root path that
+        still needs fetching, and ``inline`` maps a version to endpoint data
+        already present in this response.
+    """
+    paths: dict[str, str] = {}
+    inline: dict[str, Any] = {}
+    if not isinstance(obj, dict):
+        return paths, inline
+
+    for key, value in obj.items():
+        name = str(key)
+        if isinstance(value, list):
+            # The normal CCAPI shape: the endpoint inventory, inline.
+            inline[name] = value
+        elif isinstance(value, str) and value.startswith("/"):
+            paths[name] = value
+        elif isinstance(value, dict):
+            nested = value.get("path") or value.get("url")
+            if isinstance(nested, str) and nested.startswith("/"):
+                paths[name] = nested
+            else:
+                inline[name] = value
+    return paths, inline
 
 
-def _match_capability(hints: Iterable[str], paths: Iterable[str]) -> str | None:
+def _match_capability(
+    hints: Iterable[str], endpoints: Mapping[str, Endpoint] | Iterable[str]
+) -> str | None:
     """Choose the best path for one capability from the camera's reported paths.
 
-    Whole-segment matches beat substring matches, so a hint of ``"shutter"``
-    prefers ``/.../shutterbutton`` over ``/.../shuttermode`` only when no exact
-    segment matches -- and a more specific capability listed first in the hint
-    tuple wins outright.
+    A hint matches only as a **whole path segment**, or -- if it contains a
+    ``/`` -- as a whole trailing run of segments. Loose substring matching is
+    deliberately not supported: it silently resolved ``drive`` (drive mode) onto
+    ``drivefocus``, which would have sent drive-mode writes to the focus
+    endpoint. A capability reported as missing is diagnosable; a capability
+    quietly bound to the wrong endpoint is not.
+
+    Among matches, ranking is:
+
+    1. **Hint order.** Hints are listed most-specific-first, so an earlier hint
+       always beats a later one.
+    2. **Shorter path.** The less specialised endpoint wins -- the live-view
+       endpoint itself rather than its ``/flip`` child.
+    3. **Newer API version.** The same capability is republished under each
+       version a body supports; the newest is the one to use.
+
+    Steps 2 and 3 exist because a real camera reports the same capability many
+    times over. Without them the choice would depend on dict ordering, which is
+    a genuinely horrible bug to chase.
     """
-    path_list = list(paths)
-    for hint in hints:
-        hint_lower = hint.lower()
-        # Pass 1: the hint is exactly a path segment (or trailing segments).
-        for path in path_list:
-            segments = [s for s in path.lower().split("/") if s]
-            if hint_lower in segments or path.lower().rstrip("/").endswith("/" + hint_lower):
-                return path
-    for hint in hints:
-        # Pass 2: substring anywhere. Shorter paths win, since they are the less
-        # specialised endpoint -- /liveview over /liveview/flip for "start".
-        candidates = [p for p in path_list if hint.lower() in p.lower()]
-        if candidates:
-            return min(candidates, key=len)
-    return None
+    if isinstance(endpoints, Mapping):
+        versions = {path: ep.api_version for path, ep in endpoints.items()}
+    else:
+        versions = {path: "" for path in endpoints}
+
+    best: tuple[int, int, str] | None = None
+    best_path: str | None = None
+
+    for rank, hint in enumerate(hints):
+        hint_lower = hint.lower().strip("/")
+        for path in versions:
+            lowered = path.lower().rstrip("/")
+            if "/" in hint_lower:
+                matched = lowered.endswith("/" + hint_lower)
+            else:
+                matched = hint_lower in [s for s in lowered.split("/") if s]
+            if not matched:
+                continue
+            # Negated version so that "newer is better" sorts as "smaller key".
+            key = (rank, len(path), _negated(versions[path]))
+            if best is None or key < best:
+                best = key
+                best_path = path
+
+    return best_path
+
+
+def _negated(version: str) -> str:
+    """Sort key that orders version strings newest-first.
+
+    Inverting each digit turns a plain ascending string sort into a descending
+    one, so ``ver140`` outranks ``ver100`` inside an otherwise ascending tuple.
+    """
+    return "".join(str(9 - int(c)) if c.isdigit() else c for c in version)
 
 
 def discover(client: CCAPIClient) -> Capabilities:
@@ -186,6 +246,9 @@ def discover(client: CCAPIClient) -> Capabilities:
     caps = Capabilities()
 
     root_payload: Any = None
+    root_used = ""
+    version_paths: dict[str, str] = {}
+    inline_versions: dict[str, Any] = {}
     reached_something = False
     for candidate in ROOT_PATH_CANDIDATES:
         try:
@@ -201,10 +264,10 @@ def discover(client: CCAPIClient) -> Capabilities:
             payload = response.json()
         except ValueError:
             continue
-        versions = _extract_versions(payload)
-        if versions:
-            caps.api_versions = versions
+        version_paths, inline_versions = _extract_versions(payload)
+        if version_paths or inline_versions:
             root_payload = payload
+            root_used = candidate
             break
 
     if root_payload is None:
@@ -216,29 +279,63 @@ def discover(client: CCAPIClient) -> Capabilities:
             raise CCAPINotActivatedError(client.base_url)
         raise CameraUnreachableError(client.base_url)
 
-    # Fetch each version root to enumerate that version's endpoints. A version
-    # that fails to enumerate is skipped rather than fatal: the others may still
+    # Endpoints listed inline in the root response: the normal case, no extra
+    # requests needed.
+    for version_name, payload in sorted(inline_versions.items()):
+        _walk_paths(payload, version_name, caps.endpoints)
+
+    # Any version given as a bare root path has to be fetched. A version that
+    # fails to enumerate is skipped rather than fatal: the others may still
     # provide everything we need.
-    for version_name, version_path in sorted(caps.api_versions.items()):
+    for version_name, version_path in sorted(version_paths.items()):
         try:
             payload = client.get_json(version_path)
         except CCAPIError:
             continue
         _walk_paths(payload, version_name, caps.endpoints)
 
-    # The root response sometimes carries endpoint detail of its own.
-    _walk_paths(root_payload, caps.latest_version(), caps.endpoints)
+    # Record every version, using a root path derived from the root that
+    # actually answered -- never a literal -- so callers see a consistent
+    # {version: path} map whichever shape the camera used.
+    caps.api_versions = dict(version_paths)
+    root_prefix = root_used.rstrip("/")
+    for version_name in inline_versions:
+        caps.api_versions.setdefault(version_name, f"{root_prefix}/{version_name}/")
 
     # Resolve logical capabilities against whatever the camera actually listed.
-    matched_paths: set[str] = set()
+    matched_suffixes: set[str] = set()
     for capability in _known_capabilities():
         path = _match_capability(hints_for(capability), caps.endpoints)
         if path is not None:
-            caps.resolved[capability] = caps.endpoints[path]
-            matched_paths.add(path)
+            endpoint = caps.endpoints[path]
+            caps.resolved[capability] = endpoint
+            matched_suffixes.add(_version_suffix(endpoint))
 
-    caps.unmatched = sorted(set(caps.endpoints) - matched_paths)
+    # Compare by version-stripped suffix, not by full path. A body republishes
+    # the same capability under every API version it supports, and reporting the
+    # older copies as "unused" would bury the genuinely unrecognised endpoints
+    # this list exists to surface.
+    caps.unmatched = sorted(
+        path
+        for path, endpoint in caps.endpoints.items()
+        if _version_suffix(endpoint) not in matched_suffixes
+    )
     return caps
+
+
+def _version_suffix(endpoint: Endpoint) -> str:
+    """The endpoint's path with its API-version segment removed.
+
+    Uses the version name the camera itself reported rather than assuming where
+    the version sits in the path.
+    """
+    if not endpoint.api_version:
+        return endpoint.path
+    segments = [s for s in endpoint.path.split("/") if s]
+    if endpoint.api_version in segments:
+        index = segments.index(endpoint.api_version)
+        return "/" + "/".join(segments[index + 1 :])
+    return endpoint.path
 
 
 def _known_capabilities() -> list[str]:

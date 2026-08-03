@@ -52,6 +52,46 @@ class CCAPINotActivatedError(CCAPIError):
         self.base_url = base_url
 
 
+class CCAPIAuthError(CCAPIError):
+    """The camera rejected the request because it wants credentials.
+
+    CCAPI uses HTTP digest authentication, and only when an account has been
+    registered on the camera under the CCAPI account settings. Most setups have
+    no account and need no credentials at all.
+    """
+
+    def __init__(self, base_url: str) -> None:
+        super().__init__(
+            f"The camera at {base_url} requires authentication.\n"
+            "An account is registered on the camera under its Camera Control API "
+            "account settings, so CCAPI is using HTTP digest authentication.\n"
+            "Either:\n"
+            "  - add the matching credentials to config.yaml as camera.username "
+            "and camera.password, or\n"
+            "  - remove the account on the camera if you do not need it."
+        )
+        self.base_url = base_url
+
+
+class CCAPIBusyError(CCAPIError):
+    """The camera is temporarily unable to serve this request.
+
+    Usually means the camera is showing a menu, is mid-operation, or another
+    device already holds the single CCAPI connection the camera allows.
+    """
+
+    def __init__(self, url: str, message: str = "") -> None:
+        detail = f"\nCamera said: {message}" if message else ""
+        super().__init__(
+            f"The camera is busy and refused {url}.{detail}\n"
+            "Common causes: the camera is showing a menu or playback screen, or "
+            "another app still holds the connection -- CCAPI allows only one "
+            "connected device at a time, so quit Canon Camera Connect on your "
+            "phone and any other tethering software."
+        )
+        self.url = url
+
+
 class CCAPIResponseError(CCAPIError):
     """The camera returned an HTTP error status for a request."""
 

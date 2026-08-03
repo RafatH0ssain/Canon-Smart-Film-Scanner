@@ -649,6 +649,18 @@ def set_lens(payload: dict[str, Any]) -> dict[str, Any]:
     return {"message": "ok", "mounted": state.lens_mounted}
 
 
+@app.get("/__mock/needs-auth")
+@app.get("/__mock/needs-auth/{rest:path}")
+def needs_auth(rest: str = "") -> Response:
+    """Always answers 401, to exercise the digest-auth error path. Test helper only."""
+    return Response(
+        status_code=401,
+        content='{"message":"Unauthorized"}',
+        media_type="application/json",
+        headers={"WWW-Authenticate": 'Digest realm="ccapi", nonce="mock"'},
+    )
+
+
 @app.post("/__mock/reset")
 def reset_state() -> dict[str, str]:
     """Reset the mock camera to a clean state. Test helper only."""

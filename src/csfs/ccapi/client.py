@@ -13,9 +13,12 @@ from typing import Any, Iterator
 from urllib.parse import urljoin
 
 import requests
+from requests.auth import HTTPDigestAuth
 
 from csfs.ccapi.errors import (
     CameraUnreachableError,
+    CCAPIAuthError,
+    CCAPIBusyError,
     CCAPIResponseError,
 )
 
@@ -29,6 +32,12 @@ class CCAPIClient:
         timeout_s: Read/connect timeout for ordinary control calls.
         liveview_timeout_s: Read timeout for long-lived streaming requests.
         session: Optional pre-built ``requests.Session``, mainly for tests.
+        username: CCAPI account name, if one is registered on the camera.
+        password: That account's password.
+
+    Credentials are only needed when an account has been registered on the
+    camera under its CCAPI account settings; CCAPI then uses HTTP digest
+    authentication. Leave them unset for the usual no-account setup.
 
     Example:
         >>> with CCAPIClient("http://127.0.0.1:8080") as client:  # doctest: +SKIP
@@ -41,6 +50,8 @@ class CCAPIClient:
         timeout_s: float = 5.0,
         liveview_timeout_s: float = 30.0,
         session: requests.Session | None = None,
+        username: str = "",
+        password: str = "",
     ) -> None:
         # Strip the trailing slash so urljoin() semantics stay predictable when
         # we later join discovered absolute paths onto it.
@@ -49,6 +60,10 @@ class CCAPIClient:
         self.liveview_timeout_s = liveview_timeout_s
         self._session = session or requests.Session()
         self._owns_session = session is None
+        # Digest, not basic: CCAPI hashes the credentials rather than sending
+        # them in the clear, and requests handles the challenge/response for us.
+        if username:
+            self._session.auth = HTTPDigestAuth(username, password)
 
     # -- lifecycle ----------------------------------------------------------
 
@@ -112,6 +127,13 @@ class CCAPIClient:
             # Read the body before raising: it often carries Canon's own reason
             # string, which is far more useful than the bare status code.
             body = "" if stream else response.text
+            # Translate the two statuses with a specific real-world cause into
+            # errors that name it, rather than a bare status code the reader
+            # then has to go and look up.
+            if response.status_code == 401:
+                raise CCAPIAuthError(self.base_url)
+            if response.status_code == 503:
+                raise CCAPIBusyError(url, body.strip()[:200])
             raise CCAPIResponseError(method.upper(), url, response.status_code, body)
         return response
 

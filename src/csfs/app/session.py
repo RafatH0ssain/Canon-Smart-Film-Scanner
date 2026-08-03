@@ -153,6 +153,8 @@ class ScanSession:
             self.config.camera.base_url,
             timeout_s=self.config.camera.timeout_s,
             liveview_timeout_s=self.config.camera.liveview_timeout_s,
+            username=self.config.camera.username,
+            password=self.config.camera.password,
         )
         capabilities = discover(client)
         self.client = client

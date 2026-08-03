@@ -47,7 +47,12 @@ def main(argv: list[str] | None = None) -> int:
 
     print(f"Querying {base_url} ...\n")
     try:
-        with CCAPIClient(base_url, timeout_s=timeout) as client:
+        with CCAPIClient(
+            base_url,
+            timeout_s=timeout,
+            username=config.camera.username,
+            password=config.camera.password,
+        ) as client:
             caps = discover(client)
     except CCAPIError as exc:
         # These messages are written to be actionable; print them plainly rather

@@ -15,14 +15,22 @@
 camera:
   # Base URL of the camera's CCAPI service, with no trailing path.
   #
-  # Find this on the camera itself after enabling CCAPI: the camera displays
-  # the address it is listening on. It differs by connection type:
-  #   - Wired USB  : the camera exposes a USB-Ethernet device; the address is
-  #                  shown on the camera's CCAPI screen.
-  #   - Wi-Fi      : the address the camera shows once connected to your network.
+  # Read this off the camera once CCAPI is connected: the camera's [Wi-Fi on]
+  # screen shows the SSID and the top URL of the CCAPI service. Use the host
+  # and port from that URL, e.g. "http://192.168.1.42:8080" -- do not include
+  # the /ccapi path.
+  #
+  # Note CCAPI connects over Wi-Fi or wired LAN. USB is used only for the
+  # one-time activation, never for control.
   #
   # Leave this pointed at the mock server until you have a real camera set up.
   base_url: "http://127.0.0.1:8080"
+
+  # Only needed if you registered an account on the camera under
+  # [Camera Control API] > [Account settings]. CCAPI then requires HTTP digest
+  # authentication. Leave both empty for the usual no-account setup.
+  username: ""
+  password: ""
 
   # Seconds to wait for a normal control call before giving up.
   timeout_s: 5.0

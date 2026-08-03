@@ -38,7 +38,9 @@ All image processing (inversion, peaking, etc.) happens **on the computer**, app
 - A Canon camera that supports CCAPI (R7, R6 II, R10, R5, R6, RP, R3, 90D, 850D, and others — check Canon's current CCAPI compatibility list).
 - A macro lens capable of ~1:1 for 35mm, or appropriate magnification for your format.
 - A copy stand or repro rig, a backlight (ideally high-CRI for color), and a negative holder.
-- **Connection:** CCAPI works over Wi-Fi and, since CCAPI v1.1, over a wired USB connection. **For a fixed copy stand, wired is strongly preferred** — no dropouts, no reconnection on sleep, stable throughput for live view.
+- **Connection:** CCAPI works over **Wi-Fi** or a **wired LAN** (an Ethernet port on the body, or a WFT accessory). **USB is used only for the one-time activation, never for control** — there is no USB tethering path for CCAPI.
+  - Wired LAN is the more stable option where the body has it, but most enthusiast bodies (the R7 included) have no Ethernet port, so **Wi-Fi via your access point is the realistic setup**. Enable the camera's *Auto connect* so it rejoins on power-on, and disable auto power-off while scanning.
+  - Only **one device may be connected to the camera at a time**. Quit Canon Camera Connect and any other tethering software first.
 
 **Lens focus caveat**
 - With an **autofocus-capable** macro lens, the app can drive focus in steps from the PC.

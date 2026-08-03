@@ -38,6 +38,12 @@ class CameraConfig:
     # healthy-but-slow stream look like a connection failure.
     liveview_timeout_s: float = 30.0
 
+    # Only needed if an account is registered on the camera under its CCAPI
+    # account settings, in which case CCAPI uses HTTP digest authentication.
+    # Most setups have no account and leave these empty.
+    username: str = ""
+    password: str = ""
+
 
 @dataclass
 class CaptureConfig:

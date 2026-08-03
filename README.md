@@ -90,16 +90,23 @@ pytest
 
 These steps happen on Canon's website and on the camera itself. They cannot be automated, and you only do them once.
 
+> **CCAPI connects over Wi-Fi or wired LAN — not USB.** The USB cable is used *only* for the one-time activation in step 4. Wired LAN needs an Ethernet port on the body or a WFT accessory; most enthusiast bodies (the R7 included) have neither, so Wi-Fi via your access point is the realistic setup.
+
 1. **Update your camera's firmware** to the latest version.
 2. **Register** with [Canon's Developer Community](https://developercommunity.usa.canon.com/) for your region and request CCAPI access. Approval is not instant.
 3. **Download** the CCAPI **activation tool** and the **API reference** from Canon.
    ⚠️ Keep both *outside* this repository, or in `ccapi_reference/`, which is git-ignored. **Canon's licence forbids redistributing them** — never commit them, and never paste the reference into an issue or PR.
-4. **Run the activation tool** against your camera. This is a one-time unlock, separate from the menu toggle in the next step.
-5. **Enable CCAPI in the camera's menu** and choose a connection:
-   - **Wired USB — strongly preferred for a fixed copy stand.** No dropouts, no reconnection after sleep, steadier live-view throughput.
-   - **Wi-Fi** otherwise.
-   The camera displays the address it's listening on.
-6. **Disable auto power-off** while scanning. Bodies sleep aggressively and a sleeping camera looks exactly like a wiring fault.
+4. **Run the activation tool** with the camera connected by USB and powered on. Your computer must be online — activation contacts Canon and fails silently offline. Only one camera may be connected. This is a one-time unlock, separate from the menu steps below.
+   You'll know it worked when **`Camera Control API` appears in the camera's Wi-Fi settings menu**.
+   *If your camera's Advanced User Guide already documents CCAPI, activation is not needed — skip to step 5.*
+5. **Connect over Wi-Fi:** `Wi-Fi settings` → `Camera Control API` → `Add connection` → `Add with wizard`, then pick your access point and let the camera take an IP automatically. Register a nickname if prompted.
+6. **Read the address off the camera.** The `[Wi-Fi on]` screen shows the SSID and the CCAPI top URL. Use its host and port for `camera.base_url`.
+7. **Enable `Auto connect`** in the Camera Control API menu so the camera rejoins on power-on. Worth doing for a fixed copy stand.
+8. **Disable auto power-off** while scanning. Bodies sleep aggressively, and a sleeping camera looks exactly like a network fault. (The app also disables this over the API on connect.)
+
+**Only one device can be connected to the camera at a time.** Quit Canon Camera Connect on your phone and any other tethering software, or this app cannot connect.
+
+**Accounts are optional.** If you register one under `Camera Control API` → `Account settings`, CCAPI requires HTTP digest authentication — set `camera.username` and `camera.password` in `config.yaml` to match. Leave both empty if you registered no account.
 
 Then point the app at it:
 

@@ -8,13 +8,14 @@ camera gives it, following ``path`` arrays down to the leaves.
 
 from __future__ import annotations
 
+import json
 import logging
 from pathlib import Path
 from typing import Any
 
 from csfs.ccapi.client import CCAPIClient
 from csfs.ccapi.discovery import Capabilities
-from csfs.ccapi.errors import CCAPIError
+from csfs.ccapi.errors import CCAPIBusyError, CCAPIError
 
 logger = logging.getLogger(__name__)
 
@@ -25,6 +26,10 @@ _IMAGE_SUFFIXES = {".jpg", ".jpeg", ".cr2", ".cr3", ".heif", ".heic", ".tif", ".
 # How deep to follow the listing before giving up. Enough for the deepest known
 # layout with room to spare, and a guard against a listing that cycles.
 _MAX_DEPTH = 6
+
+# A directory listing is a short JSON array of paths. Anything far larger is not
+# a listing, and reading it would mean pulling a media file into memory.
+_MAX_LISTING_BYTES = 4 * 1024 * 1024
 
 
 def _paths_from(payload: Any) -> list[str]:
@@ -37,8 +42,67 @@ def _paths_from(payload: Any) -> list[str]:
 
 
 def _looks_like_a_file(path: str) -> bool:
-    """Whether a listed path names a file rather than another directory."""
+    """Whether a listed path names a file rather than a directory.
+
+    Keyed on having *any* extension, not on being a known image type. Storage
+    and directory entries are bare names (``card1``, ``100EOSR7``) while files
+    carry an extension, so this classifies correctly whatever the file type.
+
+    Testing against a list of image extensions instead was a real and expensive
+    bug: a movie on the card fell through as "not an image, therefore a
+    directory", so the walk requested it as a listing and the camera streamed
+    back the entire video to be parsed as JSON. One clip was enough to wedge a
+    capture for minutes.
+    """
+    return bool(Path(path).suffix)
+
+
+def _is_image(path: str) -> bool:
+    """Whether a file is a still image worth downloading as a scan."""
     return Path(path).suffix.lower() in _IMAGE_SUFFIXES
+
+
+def _fetch_listing(client: CCAPIClient, path: str) -> list[str] | None:
+    """Fetch a directory listing, refusing to swallow a media file.
+
+    Streams the response and inspects the content type before reading the body,
+    so a path that turns out to name a file is abandoned after the headers
+    rather than downloaded in full. Belt and braces alongside the
+    classification above: misjudging one entry should cost a skipped listing,
+    never a multi-megabyte download and a stalled capture.
+
+    Returns the listed paths, or None if this was not a listing.
+    """
+    try:
+        with client.stream(path) as response:
+            if not response.ok:
+                return None
+            content_type = response.headers.get("Content-Type", "").lower()
+            if "json" not in content_type:
+                logger.debug(
+                    "Skipping '%s': expected a listing, got %s", path, content_type or "unknown"
+                )
+                return None
+            # Listings are small. Cap the read so a mislabelled response cannot
+            # pull an entire file into memory.
+            body = b""
+            for chunk in response.iter_content(chunk_size=8192):
+                body += chunk
+                if len(body) > _MAX_LISTING_BYTES:
+                    logger.warning("Listing at '%s' exceeded %d bytes; ignoring.",
+                                   path, _MAX_LISTING_BYTES)
+                    return None
+        return _paths_from(json.loads(body.decode("utf-8", errors="replace")))
+    except CCAPIBusyError as exc:
+        # The camera refuses listings while it is still writing a frame, so this
+        # is the expected answer in the moment after the shutter fires. The
+        # caller polls until the file appears; warning about it every time would
+        # train the user to ignore the log.
+        logger.debug("Listing '%s' unavailable while the camera is busy: %s", path, exc)
+        return None
+    except (CCAPIError, ValueError) as exc:
+        logger.warning("Could not list '%s': %s", path, exc)
+        return None
 
 
 def list_images(client: CCAPIClient, caps: Capabilities) -> list[str]:
@@ -59,14 +123,16 @@ def list_images(client: CCAPIClient, caps: Capabilities) -> list[str]:
             if node in seen:
                 continue
             seen.add(node)
-            try:
-                payload = client.get_json(node)
-            except CCAPIError as exc:
-                logger.warning("Could not list '%s': %s", node, exc)
+            entries = _fetch_listing(client, node)
+            if entries is None:
                 continue
-            for entry in _paths_from(payload):
+            for entry in entries:
                 if _looks_like_a_file(entry):
-                    found.append(entry)
+                    # Movies and other non-image files live on the same card and
+                    # are not scans, so they are recorded as files (never walked
+                    # into) but not returned.
+                    if _is_image(entry):
+                        found.append(entry)
                 elif entry not in seen:
                     next_frontier.append(entry)
         frontier = next_frontier

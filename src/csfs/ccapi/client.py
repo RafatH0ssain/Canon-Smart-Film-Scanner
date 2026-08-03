@@ -9,6 +9,7 @@ turning a ``requests`` exception into something that names the real-world cause
 from __future__ import annotations
 
 import contextlib
+import threading
 from typing import Any, Iterator
 from urllib.parse import urljoin
 
@@ -60,15 +61,34 @@ class CCAPIClient:
         self.liveview_timeout_s = liveview_timeout_s
         self._session = session or requests.Session()
         self._owns_session = session is None
+
+        # A second session used only for long-lived streaming requests.
+        #
+        # requests.Session is not thread-safe, and the live-view pump holds a
+        # streaming response open for the entire session while control calls run
+        # on other threads. Sharing one session between them corrupted state and
+        # produced indefinite hangs on a real camera.
+        self._stream_session = requests.Session()
+
+        # Serialises control requests. The camera accepts one client and does not
+        # cope with concurrent requests while streaming: several in flight at once
+        # left threads blocked in socket reads for minutes. Streaming requests
+        # hold this only until response headers arrive, never while the body is
+        # being consumed, so a live-view stream cannot block control calls.
+        self._request_lock = threading.Lock()
+
         # Digest, not basic: CCAPI hashes the credentials rather than sending
         # them in the clear, and requests handles the challenge/response for us.
         if username:
-            self._session.auth = HTTPDigestAuth(username, password)
+            auth = HTTPDigestAuth(username, password)
+            self._session.auth = auth
+            self._stream_session.auth = HTTPDigestAuth(username, password)
 
     # -- lifecycle ----------------------------------------------------------
 
     def close(self) -> None:
-        """Close the underlying HTTP session if this client created it."""
+        """Close the underlying HTTP sessions."""
+        self._stream_session.close()
         if self._owns_session:
             self._session.close()
 
@@ -114,10 +134,15 @@ class CCAPIClient:
         """
         url = self.url_for(path)
         effective_timeout = timeout_s if timeout_s is not None else self.timeout_s
+        session = self._stream_session if stream else self._session
         try:
-            response = self._session.request(
-                method, url, timeout=effective_timeout, stream=stream, **kwargs
-            )
+            # The lock is released as soon as the call returns. For a streaming
+            # request that is when the headers arrive, so consuming the body
+            # afterwards leaves control calls free to proceed.
+            with self._request_lock:
+                response = session.request(
+                    method, url, timeout=effective_timeout, stream=stream, **kwargs
+                )
         except requests.exceptions.RequestException as exc:
             # Connection refused, DNS failure, timeout, cable pulled mid-roll.
             # All of these mean the same thing to the person at the copy stand.

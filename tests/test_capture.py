@@ -188,6 +188,55 @@ def test_movies_are_not_downloaded_as_scans(client: CCAPIClient) -> None:
         assert not path.upper().endswith(".MP4")
 
 
+def test_a_movie_on_the_card_does_not_stall_the_listing(client: CCAPIClient) -> None:
+    """The regression test for a five-minute capture hang.
+
+    Classifying entries as "image, therefore a file; anything else, therefore a
+    directory" made the walk request a movie as a listing, and the camera
+    answered with the whole video for us to parse as JSON. Listing must stay
+    fast and must not fetch file contents.
+    """
+    caps = discover(client)
+    shutter_api.release(client, caps)
+
+    started = time.monotonic()
+    images = contents_api.list_images(client, caps)
+    elapsed = time.monotonic() - started
+
+    assert elapsed < 10.0, f"listing took {elapsed:.1f}s -- it is fetching file contents"
+    assert len(images) == 1
+    assert images[0].endswith(".JPG")
+
+
+def test_listing_walks_every_card(client: CCAPIClient) -> None:
+    """Bodies with two slots put captures on either one."""
+    caps = discover(client)
+    root = client.get_json(caps.path("contents"))["path"]
+    assert len(root) == 2
+
+
+def test_unknown_file_types_are_never_walked_into(client: CCAPIClient) -> None:
+    """Anything with an extension is a file, whatever the extension is.
+
+    A new Canon file type must not become a directory the walker tries to fetch.
+    """
+    assert contents_api._looks_like_a_file("/ccapi/ver130/contents/card1/X/IMG_1.CR4")
+    assert contents_api._looks_like_a_file("/ccapi/ver130/contents/card1/X/CLIP.XYZ")
+    assert not contents_api._looks_like_a_file("/ccapi/ver130/contents/card1")
+    assert not contents_api._looks_like_a_file("/ccapi/ver130/contents/card1/100EOSR7")
+
+
+def test_listing_ignores_a_response_that_is_not_a_listing(client: CCAPIClient) -> None:
+    """Belt and braces: a path that turns out to be a file is abandoned after
+    the headers rather than downloaded."""
+    caps = discover(client)
+    shutter_api.release(client, caps)
+    card = client.get_json(caps.path("contents"))["path"][0]
+    image = client.get_json(client.get_json(card)["path"][0])["path"][0]
+
+    assert contents_api._fetch_listing(client, image) is None
+
+
 # ---------------------------------------------------------------------------
 # Session-level behaviour
 # ---------------------------------------------------------------------------

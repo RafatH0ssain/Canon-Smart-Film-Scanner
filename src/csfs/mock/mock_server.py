@@ -663,32 +663,53 @@ def event_polling() -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 
+# A real body reports two card slots and names its folder after the model.
+_FOLDER = "100EOSR7"
+
+# A movie sitting on the card alongside the stills. Present because a walker
+# that classifies entries by "is this a known image type?" mistakes this for a
+# directory, requests it as a listing, and the camera answers with the whole
+# video -- which wedged a real capture for minutes.
+_MOVIE_NAME = "MVI_0421.MP4"
+_MOVIE_BYTES = b"\x00\x00\x00\x20ftypmp42" + b"\xab" * (3 * 1024 * 1024)
+
+
 @router.get("/contents")
 def contents_root(request: Request) -> dict[str, list[str]]:
-    return {"path": [f"{_version_prefix(request)}/contents/card1"]}
-
-
-@router.get("/contents/card1")
-def contents_card(request: Request) -> dict[str, list[str]]:
-    return {"path": [f"{_version_prefix(request)}/contents/card1/100CANON"]}
-
-
-@router.get("/contents/card1/100CANON")
-def contents_list(request: Request) -> dict[str, list[str]]:
     prefix = _version_prefix(request)
-    return {"path": [f"{prefix}/contents/card1/100CANON/{f.name}" for f in state.files]}
+    return {"path": [f"{prefix}/contents/card1", f"{prefix}/contents/card2"]}
 
 
-@router.get("/contents/card1/100CANON/{name}")
-def contents_download(name: str) -> Response:
+@router.get("/contents/{card}")
+def contents_card(card: str, request: Request) -> dict[str, list[str]]:
+    if card not in ("card1", "card2"):
+        raise HTTPException(status_code=404, detail={"message": f"No card '{card}'"})
+    return {"path": [f"{_version_prefix(request)}/contents/{card}/{_FOLDER}"]}
+
+
+@router.get("/contents/{card}/" + _FOLDER)
+def contents_list(card: str, request: Request) -> dict[str, list[str]]:
+    prefix = _version_prefix(request)
+    if card == "card1":
+        names = [f.name for f in state.files]
+    else:
+        # The second card carries the movie, so the walk always meets one.
+        names = [_MOVIE_NAME]
+    return {"path": [f"{prefix}/contents/{card}/{_FOLDER}/{name}" for name in names]}
+
+
+@router.get("/contents/{card}/" + _FOLDER + "/{name}")
+def contents_download(card: str, name: str) -> Response:
+    if name == _MOVIE_NAME:
+        return Response(content=_MOVIE_BYTES, media_type="video/mp4")
     for f in state.files:
         if f.name == name:
             return Response(content=f.data, media_type="image/jpeg")
     raise HTTPException(status_code=404, detail={"message": f"Not found: '{name}'"})
 
 
-@router.delete("/contents/card1/100CANON/{name}")
-def contents_delete(name: str) -> dict[str, Any]:
+@router.delete("/contents/{card}/" + _FOLDER + "/{name}")
+def contents_delete(card: str, name: str) -> dict[str, Any]:
     for i, f in enumerate(state.files):
         if f.name == name:
             del state.files[i]

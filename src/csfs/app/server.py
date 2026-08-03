@@ -22,7 +22,7 @@ from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from csfs.app.session import ScanSession
+from csfs.app.session import CaptureInProgressError, ScanSession
 from csfs.ccapi.errors import CCAPIError
 from csfs.config import Config, load_config
 from csfs.processing.codec import DecodeError, decode_jpeg, encode_jpeg
@@ -144,6 +144,8 @@ def connect() -> dict[str, Any]:
     """Connect to the camera and start live view."""
     try:
         session.connect()
+    except CaptureInProgressError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except CCAPIError as exc:
         # These messages name the real-world cause; pass them straight through
         # so the browser shows something actionable.
@@ -372,6 +374,10 @@ def capture() -> dict[str, Any]:
         raise HTTPException(status_code=409, detail="Not connected.")
     try:
         path = session.capture()
+    except CaptureInProgressError as exc:
+        # 409, not 500: the request is fine, the timing is not. Queueing instead
+        # would park a thread behind the running capture indefinitely.
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except CCAPIError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
     except RuntimeError as exc:

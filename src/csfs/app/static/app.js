@@ -263,17 +263,31 @@ async function capture() {
   el.capture.disabled = true;
   el.captureStatus.hidden = false;
   el.captureStatus.className = "capture-status busy";
-  el.captureStatus.textContent = "Settling, then firing…";
+
+  // A capture is settle delay + exposure + waiting for the card + downloading a
+  // file that can be tens of megabytes over Wi-Fi. A static message makes a slow
+  // but healthy capture indistinguishable from a hang, so show elapsed time and
+  // say what is happening at each stage.
+  const started = Date.now();
+  const tick = setInterval(() => {
+    const secs = Math.round((Date.now() - started) / 1000);
+    const stage = secs < 3 ? "Settling, then firing…"
+      : secs < 8 ? "Fired — waiting for the card…"
+      : "Downloading from the camera…";
+    el.captureStatus.textContent = `${stage} (${secs}s)`;
+  }, 250);
 
   try {
     const result = await post("/api/capture");
     el.captureStatus.className = "capture-status ok";
-    el.captureStatus.textContent = `Saved ${result.name}`;
+    el.captureStatus.textContent =
+      `Saved ${result.name} in ${Math.round((Date.now() - started) / 1000)}s`;
     refreshCaptures();
   } catch (err) {
     el.captureStatus.className = "capture-status bad";
     el.captureStatus.textContent = err.message;
   } finally {
+    clearInterval(tick);
     capturing = false;
     el.capture.disabled = !connected;
   }

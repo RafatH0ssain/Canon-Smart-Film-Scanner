@@ -32,6 +32,10 @@ from csfs.config import Config
 
 logger = logging.getLogger(__name__)
 
+
+class CaptureInProgressError(RuntimeError):
+    """Raised when a capture is requested while one is already running."""
+
 # Settings surfaced in the UI. Each is optional -- a body that lacks one simply
 # does not show it.
 _REPORTED_SETTINGS = (
@@ -156,6 +160,7 @@ class ScanSession:
     # reading only means something next to the best found so far.
     best_sharpness: float = 0.0
     _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
+    _connect_lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
 
     @property
     def connected(self) -> bool:
@@ -168,7 +173,19 @@ class ScanSession:
         select the electronic shutter or disable auto power-off is still
         perfectly usable for scanning, just slightly less convenient. Refusing
         to connect over it would be the wrong call.
+
+        Refuses to run twice at once. Connecting involves a dozen round trips,
+        so an impatient second click would otherwise tear down the connection
+        the first one was still building.
         """
+        if not self._connect_lock.acquire(blocking=False):
+            raise CaptureInProgressError("Already connecting. Give it a moment.")
+        try:
+            return self._connect()
+        finally:
+            self._connect_lock.release()
+
+    def _connect(self) -> Capabilities:
         self.disconnect()
 
         client = CCAPIClient(
@@ -246,7 +263,14 @@ class ScanSession:
             raise RuntimeError("Not connected to a camera.")
         assert self.client is not None and self.capabilities is not None
 
-        with self._lock:
+        # Refuse rather than queue. Blocking here meant every extra click -- or
+        # every extra browser tab -- parked a thread behind the first capture
+        # indefinitely, so one slow capture became a pile of stuck requests.
+        if not self._lock.acquire(blocking=False):
+            raise CaptureInProgressError(
+                "A capture is already in progress. Wait for it to finish."
+            )
+        try:
             # Snapshot first so the new file can be identified by difference.
             # More reliable than assuming the highest-numbered name is new, which
             # breaks on a card whose numbering has wrapped.
@@ -274,6 +298,8 @@ class ScanSession:
             if self.config.capture.delete_from_camera_after_download:
                 contents_api.delete(self.client, remote)
             return local
+        finally:
+            self._lock.release()
 
     def _wait_for_new_image(self, before: set[str], timeout_s: float = 30.0) -> str | None:
         """Poll the card until a file appears that was not there before.

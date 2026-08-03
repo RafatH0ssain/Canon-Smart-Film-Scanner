@@ -107,11 +107,68 @@ def choose_supported(preference: tuple[str, ...], setting: Setting | None) -> st
     return None
 
 
-def read_all(client: CCAPIClient, caps: Capabilities, capabilities: tuple[str, ...]) -> dict[str, Setting]:
-    """Read several settings, skipping any this camera does not expose."""
+# CCAPI's own name for each capability, as it appears in the combined
+# shooting-settings response.
+_BULK_KEYS: dict[str, str] = {
+    "iso": "iso",
+    "aperture": "av",
+    "shutter_speed": "tv",
+    "white_balance": "wb",
+    "shutter_mode": "shuttermode",
+    "af_operation": "afoperation",
+    "drive_mode": "drive",
+    "exposure": "exposure",
+    "af_method": "afmethod",
+}
+
+
+def read_all(
+    client: CCAPIClient, caps: Capabilities, capabilities: tuple[str, ...]
+) -> dict[str, Setting]:
+    """Read several settings, skipping any this camera does not expose.
+
+    Uses the combined shooting-settings endpoint when the camera offers it,
+    which collapses one request per setting into a single request. That matters
+    more than it looks: this runs on every UI poll, and firing seven requests at
+    a camera that is simultaneously streaming live view is enough to make it
+    stop responding.
+
+    Falls back to reading settings individually if the combined endpoint is
+    missing or does not contain what we need.
+    """
+    out = _read_all_bulk(client, caps, capabilities)
+
+    # Fill in anything the combined response did not cover.
+    for capability in capabilities:
+        if capability in out:
+            continue
+        setting = read_setting(client, caps, capability)
+        if setting is not None:
+            out[capability] = setting
+    return out
+
+
+def _read_all_bulk(
+    client: CCAPIClient, caps: Capabilities, capabilities: tuple[str, ...]
+) -> dict[str, Setting]:
+    """Read what we can from the combined shooting-settings endpoint."""
+    if not caps.has("shooting_settings"):
+        return {}
+    try:
+        payload = client.get_json(caps.path("shooting_settings"))
+    except CCAPIError as exc:
+        logger.debug("Combined settings read failed, falling back: %s", exc)
+        return {}
+    if not isinstance(payload, dict):
+        return {}
+
     out: dict[str, Setting] = {}
     for capability in capabilities:
-        setting = read_setting(client, caps, capability)
+        key = _BULK_KEYS.get(capability)
+        if key is None:
+            continue
+        entry = payload.get(key)
+        setting = _to_setting(capability, entry)
         if setting is not None:
             out[capability] = setting
     return out

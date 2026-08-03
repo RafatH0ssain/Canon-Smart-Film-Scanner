@@ -1,0 +1,68 @@
+# ---------------------------------------------------------------------------
+# Secrets & local config  --  NON-NEGOTIABLE
+# ---------------------------------------------------------------------------
+# config.yaml holds the camera's IP address. Never commit it.
+config.yaml
+*.local.*
+.env
+.env.*
+
+# ---------------------------------------------------------------------------
+# Canon CCAPI reference & activation  --  NON-NEGOTIABLE
+# Canon licenses these per-developer and forbids redistribution.
+# Keep your copy outside the repo, or in ./ccapi_reference/ which is ignored.
+# ---------------------------------------------------------------------------
+ccapi_reference/
+*canon*ccapi*reference*
+*CCAPI*Reference*
+*.CCA
+
+# ---------------------------------------------------------------------------
+# User captures / scans  --  NON-NEGOTIABLE
+# Your negatives are yours. They do not belong in a public repo.
+# ---------------------------------------------------------------------------
+captures/
+scans/
+rolls/
+*.CR3
+*.cr3
+*.tif
+*.tiff
+*.jpg
+*.jpeg
+*.dng
+*.png
+# Allow-list for project assets we *do* want tracked (docs, sample fixtures).
+!docs/**/*.png
+!docs/**/*.jpg
+!tests/fixtures/**/*.png
+!src/csfs/app/static/**/*.png
+!src/csfs/app/static/**/*.svg
+
+# ---------------------------------------------------------------------------
+# Python
+# ---------------------------------------------------------------------------
+.venv/
+venv/
+env/
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+dist/
+build/
+*.egg-info/
+
+# ---------------------------------------------------------------------------
+# Editors / OS
+# ---------------------------------------------------------------------------
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
+desktop.ini

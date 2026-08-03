@@ -1,0 +1,67 @@
+# Canon Smart Film Scan -- example configuration
+#
+# Copy this file to `config.yaml` and edit it:
+#
+#     cp config.example.yaml config.yaml        (macOS/Linux)
+#     copy config.example.yaml config.yaml      (Windows)
+#
+# `config.yaml` is git-ignored because it contains your camera's IP address.
+# Never commit it.
+#
+# Every value below can also be overridden by an environment variable named
+# CSFS_<SECTION>_<KEY>, uppercased -- e.g. CSFS_CAMERA_BASE_URL. Environment
+# variables win over the file. Useful for CI and for temporary experiments.
+
+camera:
+  # Base URL of the camera's CCAPI service, with no trailing path.
+  #
+  # Find this on the camera itself after enabling CCAPI: the camera displays
+  # the address it is listening on. It differs by connection type:
+  #   - Wired USB  : the camera exposes a USB-Ethernet device; the address is
+  #                  shown on the camera's CCAPI screen.
+  #   - Wi-Fi      : the address the camera shows once connected to your network.
+  #
+  # Leave this pointed at the mock server until you have a real camera set up.
+  base_url: "http://127.0.0.1:8080"
+
+  # Seconds to wait for a normal control call before giving up.
+  timeout_s: 5.0
+
+  # Live view is a long-lived streaming request, so it needs its own, longer
+  # read timeout. Too short and a slow-but-healthy stream looks like a failure.
+  liveview_timeout_s: 30.0
+
+capture:
+  # Seconds to wait after the *last* command that could have disturbed the rig
+  # before actually firing the shutter. On a copy stand, residual vibration is
+  # the main cause of soft scans; this is the cheapest fix available.
+  settle_delay_s: 1.5
+
+  # Prefer the electronic (silent) shutter. This eliminates mechanical shutter
+  # shock. If the connected body does not expose the setting, the app logs a
+  # warning and continues rather than refusing to work.
+  prefer_electronic_shutter: true
+
+  # Where downloaded captures are written. Relative paths resolve against the
+  # repository root. This directory is git-ignored.
+  output_dir: "captures"
+
+  # Delete the file from the camera's card after a verified download.
+  # Default is false: keeping the original on the card is the safer choice.
+  delete_from_camera_after_download: false
+
+film:
+  # Which inversion pipeline the preview uses by default: "bw" or "color".
+  # Both are first-class. This is only the startup default; the UI can switch.
+  mode: "bw"
+
+server:
+  # The local web UI. Bound to loopback by default -- do not expose this to a
+  # network you do not trust; it can fire your shutter.
+  host: "127.0.0.1"
+  port: 8000
+
+mock:
+  # The camera-free mock CCAPI server, used for development and tests.
+  host: "127.0.0.1"
+  port: 8080

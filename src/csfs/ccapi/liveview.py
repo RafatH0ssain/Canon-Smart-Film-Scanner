@@ -135,17 +135,62 @@ def _content_length(headers: bytes) -> int | None:
     return None
 
 
-class ScrollFrameParser:
+class JPEGStreamParser:
+    """Incremental parser for a stream of bare, concatenated JPEGs.
+
+    This is what the ``scroll`` endpoint delivers: JPEG data split across HTTP
+    chunks with no framing of Canon's own on top. HTTP's chunked transfer
+    encoding is handled by the HTTP library, so what arrives here is simply one
+    JPEG after another.
+
+    Frames are therefore delimited by the JPEG markers themselves -- start of
+    image, then end of image.
+    """
+
+    def __init__(self) -> None:
+        self._buffer = bytearray()
+
+    def feed(self, chunk: bytes) -> Iterator[bytes]:
+        """Add received bytes and yield any frames they complete."""
+        self._buffer.extend(chunk)
+        if len(self._buffer) > _MAX_BUFFER_BYTES:
+            logger.warning("Live-view buffer overran; resynchronising on the next frame.")
+            marker = self._buffer.rfind(_SOI)
+            del self._buffer[: marker if marker > 0 else len(self._buffer)]
+        while True:
+            frame = self._next_frame()
+            if frame is None:
+                return
+            yield frame
+
+    def _next_frame(self) -> bytes | None:
+        soi = self._buffer.find(_SOI)
+        if soi < 0:
+            return None
+        eoi = self._buffer.find(_EOI, soi + len(_SOI))
+        if eoi < 0:
+            return None
+        end = eoi + len(_EOI)
+        frame = bytes(self._buffer[soi:end])
+        del self._buffer[:end]
+        return frame
+
+
+class LiveViewDetailParser:
     """Incremental parser for Canon's binary live-view framing.
 
-    Each frame is ``0xFF 0x00 0x00``, a 4-byte length, the JPEG, then an end
-    marker.
+    Used by the ``flipdetail`` and ``scrolldetail`` endpoints, which wrap the
+    image (and optional incidental information) in a header of a marker, a data
+    type, and a 4-byte length, followed by an end marker.
 
-    UNVERIFIED: the byte order of the length field has not been confirmed
-    against a real body. Big-endian is tried first, and a length that does not
-    produce a JPEG starting with the SOI marker falls back to scanning for
-    SOI/EOI directly -- which makes this parser work either way. This
-    uncertainty is exactly why the multipart endpoint is preferred.
+    Not used by the default live-view path. It is kept because the detail
+    endpoints carry the AF-frame and exposure information later milestones may
+    want, and because ``scroll`` and ``scrolldetail`` are easy to confuse --
+    only the latter has this framing.
+
+    UNVERIFIED: the byte order of the length field is not confirmed against real
+    hardware. Big-endian is tried first, and a length that does not yield a JPEG
+    falls back to scanning for the markers, so the parser works either way.
     """
 
     def __init__(self) -> None:
@@ -246,8 +291,15 @@ class LiveView:
         if not self._started:
             return
         try:
+            # Both fields must be sent. A real EOS R7 rejects a body carrying
+            # only liveviewsize with 400 "Invalid parameter", so omitting
+            # cameradisplay here left live view running on the camera.
             self._client.post(
-                self._caps.path("liveview"), json={"liveviewsize": LIVEVIEW_SIZE_OFF}
+                self._caps.path("liveview"),
+                json={
+                    "liveviewsize": LIVEVIEW_SIZE_OFF,
+                    "cameradisplay": self._camera_display,
+                },
             )
         except CCAPIError as exc:
             logger.warning("Could not stop live view cleanly: %s", exc)
@@ -282,13 +334,21 @@ class LiveView:
             yield from self.poll_frames()
             return
 
-        parser: MultipartJPEGParser | ScrollFrameParser
+        path = self._caps.path(capability)
+        self._clear_stale_stream(capability, path)
+
+        parser: MultipartJPEGParser | JPEGStreamParser | LiveViewDetailParser
         if capability == "liveview_multipart":
             parser = MultipartJPEGParser()
+        elif capability.endswith("detail"):
+            parser = LiveViewDetailParser()
         else:
-            parser = ScrollFrameParser()
+            # 'scroll' carries bare concatenated JPEGs, not Canon's binary
+            # framing -- that belongs to 'scrolldetail'. Confusing the two
+            # yields no frames at all rather than wrong ones.
+            parser = JPEGStreamParser()
 
-        with self._client.stream(self._caps.path(capability)) as response:
+        with self._client.stream(path) as response:
             if capability == "liveview_multipart":
                 boundary = _boundary_from_content_type(response.headers.get("Content-Type", ""))
                 if boundary:
@@ -297,6 +357,25 @@ class LiveView:
                 if not chunk:
                     continue
                 yield from parser.feed(chunk)
+
+    def _clear_stale_stream(self, capability: str, path: str) -> None:
+        """Terminate a stream session the camera still believes is open.
+
+        The camera answers 503 "Already started" if a previous run's stream was
+        never closed -- a dropped connection or a killed process is enough. The
+        endpoint's own DELETE clears that, and doing it up front turns an
+        otherwise baffling failure into a non-event.
+
+        Only attempted where the camera reports DELETE is supported, and never
+        allowed to raise: this is a best-effort tidy-up before the real request.
+        """
+        endpoint = self._caps.resolved.get(capability)
+        if endpoint is None or not endpoint.supports("delete"):
+            return
+        try:
+            self._client.delete(path, expect_status=False)
+        except CCAPIError as exc:
+            logger.debug("Pre-emptive stream close failed (harmless): %s", exc)
 
     def poll_frames(self, interval_s: float = 0.1) -> Iterator[bytes]:
         """Yield frames by repeatedly requesting a single image.

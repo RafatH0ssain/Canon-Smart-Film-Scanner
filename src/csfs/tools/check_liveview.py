@@ -34,20 +34,35 @@ _SCROLL_HEADER = b"\xff\x00\x00"
 
 
 def _analyse_framing(raw: bytes) -> None:
-    """Report how Canon's binary live-view framing is actually laid out.
+    """Report how the chunked live-view stream is actually framed.
 
-    The question this exists to settle is the byte order of the length field.
-    Rather than trusting either guess, it measures the real JPEG length from its
-    start/end markers and reports which interpretation matches.
+    Two shapes are possible and are easy to confuse. The ``scroll`` endpoint
+    sends bare, concatenated JPEGs with no framing of Canon's own; the
+    ``scrolldetail`` endpoint wraps each frame in a marker, data type and 4-byte
+    length. This measures which one arrived, and for the framed shape settles
+    the byte order of the length field by comparing it against the JPEG's real
+    length as measured from its markers.
     """
-    print("\nBINARY FRAMING ANALYSIS")
+    print("\nSTREAM FRAMING ANALYSIS")
     print(f"  captured {len(raw)} raw bytes")
+    print(f"  first 16 bytes: {raw[:16].hex(' ')}")
+
+    if raw.startswith(_SOI):
+        print("  => Stream begins with a JPEG start-of-image marker.")
+        print("     FORMAT: bare concatenated JPEGs, no Canon framing.")
+        print("     This matches the expectation for 'scroll'; JPEGStreamParser handles it.")
+        count = raw.count(_SOI)
+        print(f"     start-of-image markers in the sample: {count}")
+        return
 
     start = raw.find(_SCROLL_HEADER)
     if start < 0:
-        print("  No 0xFF 0x00 0x00 header found. The framing differs from expectations.")
-        print(f"  First 32 bytes: {raw[:32].hex(' ')}")
+        print("  Neither a JPEG marker nor a 0xFF 0x00 0x00 header at the start.")
+        print("  The framing differs from anything this project expects -- please report")
+        print("  the byte dump above.")
         return
+
+    print("  => Stream uses Canon's binary framing (marker + type + length).")
 
     print(f"  header found at offset {start}")
     size_field = raw[start + 3 : start + 7]
@@ -131,8 +146,8 @@ def _run(client: CCAPIClient, caps, args) -> int:  # noqa: ANN001
     chosen = live.stream_capability()
     print(f"\nCHOSEN TRANSPORT: {chosen or 'none -- will poll single frames'}")
     if chosen == "liveview_scroll":
-        print("  This body has no multipart endpoint, so Canon's binary framing is")
-        print("  the primary path rather than a fallback. Analysing it below.")
+        print("  This body has no multipart endpoint, so the chunked stream is the")
+        print("  primary path rather than a fallback. Analysing its framing below.")
 
     live.start()
     try:
@@ -151,13 +166,24 @@ def _run(client: CCAPIClient, caps, args) -> int:  # noqa: ANN001
             print(f"  ok: {len(single)} bytes, {image.shape[1]}x{image.shape[0]}")
 
         if chosen == "liveview_scroll":
+            path = caps.path("liveview_scroll")
+            # Clear any session a previous run left open, or the camera answers
+            # 503 "Already started" and the analysis never happens.
+            client.delete(path, expect_status=False)
             raw = b""
-            with client.stream(caps.path("liveview_scroll")) as response:
-                for chunk in response.iter_content(chunk_size=8192):
-                    raw += chunk
-                    if len(raw) > 200_000:
-                        break
-            _analyse_framing(raw)
+            try:
+                with client.stream(path) as response:
+                    print(f"\n  stream Content-Type: {response.headers.get('Content-Type')}")
+                    for chunk in response.iter_content(chunk_size=8192):
+                        raw += chunk
+                        if len(raw) > 200_000:
+                            break
+            except CCAPIError as exc:
+                print(f"\n  Could not open the chunked stream: {exc}")
+            finally:
+                client.delete(path, expect_status=False)
+            if raw:
+                _analyse_framing(raw)
 
         print(f"\nPULLING {args.frames} FRAMES THROUGH THE PARSER")
         decoded = 0

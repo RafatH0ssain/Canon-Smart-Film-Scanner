@@ -126,7 +126,13 @@ class CCAPIClient:
         if expect_status and not response.ok:
             # Read the body before raising: it often carries Canon's own reason
             # string, which is far more useful than the bare status code.
-            body = "" if stream else response.text
+            # This applies to streaming requests too -- an error response is a
+            # short JSON body, not a stream, and skipping it here threw away the
+            # only useful diagnostic when a live-view stream was refused.
+            try:
+                body = response.text
+            except Exception:  # noqa: BLE001 - diagnostics must never mask the real error
+                body = ""
             # Translate the two statuses with a specific real-world cause into
             # errors that name it, rather than a bare status code the reader
             # then has to go and look up.

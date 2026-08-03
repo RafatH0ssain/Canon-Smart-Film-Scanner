@@ -94,8 +94,13 @@ def test_multipart_stream_delivers_multiple_frames(client: CCAPIClient) -> None:
     assert b"Content-Type: image/jpeg" in collected
 
 
-def test_scroll_stream_uses_canon_binary_framing(client: CCAPIClient) -> None:
-    """The fallback stream is framed bytes, not multipart."""
+def test_scroll_stream_sends_bare_jpegs(client: CCAPIClient) -> None:
+    """'scroll' carries concatenated JPEGs, with no framing of Canon's own.
+
+    The binary framing belongs to 'scrolldetail'. Confusing the two is not a
+    cosmetic mistake: a parser expecting a length header finds none and yields
+    no frames at all.
+    """
     caps = discover(client)
     _start_liveview(client, caps)
     with client.stream(caps.path("liveview_scroll")) as response:
@@ -105,7 +110,33 @@ def test_scroll_stream_uses_canon_binary_framing(client: CCAPIClient) -> None:
             collected += chunk
             if len(collected) > 40_000:
                 break
+    assert collected.startswith(b"\xff\xd8")  # JPEG start-of-image
+    assert not collected.startswith(b"\xff\x00\x00")
+
+
+def test_scrolldetail_stream_uses_canon_binary_framing(client: CCAPIClient) -> None:
+    """The 'detail' variant is the one with the marker/type/length header."""
+    caps = discover(client)
+    _start_liveview(client, caps)
+    with client.stream(caps.path("liveview_scrolldetail")) as response:
+        collected = b""
+        for chunk in response.iter_content(chunk_size=8192):
+            collected += chunk
+            if len(collected) > 40_000:
+                break
     assert collected.startswith(b"\xff\x00\x00")
+
+
+def test_scroll_reports_already_started_for_a_second_stream(client: CCAPIClient) -> None:
+    """A leftover session must announce itself the way a real body does."""
+    caps = discover(client)
+    _start_liveview(client, caps)
+    path = caps.path("liveview_scroll")
+    with client.stream(path):
+        second = client.get(path, expect_status=False)
+        assert second.status_code == 503
+        assert "Already started" in second.text
+    client.delete(path, expect_status=False)
 
 
 # ---------------------------------------------------------------------------

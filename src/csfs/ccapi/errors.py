@@ -25,8 +25,11 @@ class CameraUnreachableError(CCAPIError):
             "sticky across power cycles on all bodies.\n"
             "  3. Does the address match what the camera's CCAPI screen shows? "
             "Set it in config.yaml under camera.base_url.\n"
-            "  4. If on Wi-Fi, are the PC and camera on the same network? "
-            "For a fixed copy stand, wired USB is more reliable."
+            "  4. Are the PC and camera on the same network, with decent signal "
+            "at the copy stand? CCAPI runs over Wi-Fi or wired LAN -- USB is "
+            "only used for the one-time activation, never for control.\n"
+            "  5. Is another device connected? CCAPI allows only one at a time, "
+            "so quit Canon Camera Connect and any other tethering software."
         )
         self.base_url = base_url
         self.__cause__ = cause

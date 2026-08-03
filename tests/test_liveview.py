@@ -14,9 +14,10 @@ import pytest
 
 from csfs.ccapi import CCAPIClient, discover
 from csfs.ccapi.liveview import (
+    JPEGStreamParser,
     LiveView,
+    LiveViewDetailParser,
     MultipartJPEGParser,
-    ScrollFrameParser,
     _boundary_from_content_type,
 )
 from csfs.processing.codec import decode_jpeg, encode_jpeg
@@ -106,32 +107,62 @@ def test_boundary_extraction(header: str, expected: str | None) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Canon binary framing
+# Bare JPEG stream -- what 'scroll' actually delivers
 # ---------------------------------------------------------------------------
 
 
-def test_scroll_parser_reads_declared_lengths() -> None:
+def test_jpeg_stream_parser_splits_concatenated_frames() -> None:
+    """'scroll' sends bare JPEGs back to back, delimited only by their markers."""
+    assert list(JPEGStreamParser().feed(JPEG_A + JPEG_B)) == [JPEG_A, JPEG_B]
+
+
+def test_jpeg_stream_parser_handles_split_chunks() -> None:
+    stream = JPEG_A + JPEG_B
+    parser = JPEGStreamParser()
+    frames = []
+    for i in range(0, len(stream), 11):
+        frames.extend(parser.feed(stream[i : i + 11]))
+    assert frames == [JPEG_A, JPEG_B]
+
+
+def test_jpeg_stream_parser_waits_for_a_complete_frame() -> None:
+    parser = JPEGStreamParser()
+    assert list(parser.feed(JPEG_A[:-10])) == []
+    assert list(parser.feed(JPEG_A[-10:])) == [JPEG_A]
+
+
+def test_jpeg_stream_parser_ignores_leading_junk() -> None:
+    """Resynchronises on the next start-of-image rather than giving up."""
+    assert list(JPEGStreamParser().feed(b"\x00\x01\x02" + JPEG_A)) == [JPEG_A]
+
+
+# ---------------------------------------------------------------------------
+# Canon binary framing -- used by the 'detail' endpoints, not by 'scroll'
+# ---------------------------------------------------------------------------
+
+
+def test_detail_parser_reads_declared_lengths() -> None:
     stream = b""
     for payload in (JPEG_A, JPEG_B):
         stream += b"\xff\x00\x00" + struct.pack(">I", len(payload)) + payload + b"\xff\xff"
-    assert list(ScrollFrameParser().feed(stream)) == [JPEG_A, JPEG_B]
+    assert list(LiveViewDetailParser().feed(stream)) == [JPEG_A, JPEG_B]
 
 
-def test_scroll_parser_survives_the_wrong_byte_order() -> None:
+def test_detail_parser_survives_the_wrong_byte_order() -> None:
     """The length field's endianness is unconfirmed, so this must not be fatal.
 
     With a little-endian length the declared size is nonsense, and the parser has
     to recover by scanning for the JPEG markers instead.
     """
     stream = b"\xff\x00\x00" + struct.pack("<I", len(JPEG_A)) + JPEG_A + b"\xff\xff"
-    frames = list(ScrollFrameParser().feed(stream))
+    frames = list(LiveViewDetailParser().feed(stream))
     assert len(frames) == 1
     assert decode_jpeg(frames[0]).shape == (48, 64, 3)
 
 
-def test_scroll_parser_handles_split_chunks() -> None:
+def test_detail_parser_handles_split_chunks() -> None:
     stream = b"\xff\x00\x00" + struct.pack(">I", len(JPEG_A)) + JPEG_A + b"\xff\xff"
-    parser = ScrollFrameParser()
+    parser = LiveViewDetailParser()
     frames = []
     for i in range(0, len(stream), 13):
         frames.extend(parser.feed(stream[i : i + 13]))
@@ -217,6 +248,33 @@ def test_r7_shaped_body_streams_decodable_frames(r7_client: CCAPIClient) -> None
     assert len(frames) == 3
     for frame in frames:
         assert decode_jpeg(frame).shape == (640, 960, 3)
+
+
+def test_stale_stream_session_is_cleared_before_streaming(
+    r7_client: CCAPIClient, mock_camera_url: str
+) -> None:
+    """A crashed client leaves the camera answering 503 "Already started".
+
+    Recovering automatically turns a baffling failure into a non-event.
+    """
+    import requests
+
+    caps = discover(r7_client)
+    live = LiveView(r7_client, caps)
+    live.start()
+    try:
+        # Simulate a leftover session from a previous process.
+        requests.get(
+            f"{mock_camera_url}{caps.path('liveview_scroll')}", stream=True, timeout=5
+        )
+        frames = []
+        for frame in live.frames():
+            frames.append(frame)
+            if len(frames) >= 2:
+                break
+    finally:
+        live.stop()
+    assert len(frames) == 2
 
 
 def test_r7_shaped_body_hides_camera_zoom(r7_client: CCAPIClient) -> None:

@@ -114,6 +114,11 @@ class MockCameraState:
     has_multipart: bool = True
     has_lv_zoom: bool = True
 
+    # A chunked stream the camera believes is still open. A real body answers
+    # 503 "Already started" until it is closed, which is how a crashed client's
+    # leftover session shows up.
+    scroll_streaming: bool = False
+
     lens_mounted: bool = True
     lens_name: str = "RF100mm F2.8 L MACRO IS USM (mock)"
 
@@ -222,6 +227,7 @@ def _endpoints_for(base: str, *, modern: bool) -> list[dict[str, Any]]:
         _endpoint(f"{base}/shooting/liveview", post=True),
         _endpoint(f"{base}/shooting/liveview/flip", get=True),
         _endpoint(f"{base}/shooting/liveview/scroll", get=True, delete=True),
+        _endpoint(f"{base}/shooting/liveview/scrolldetail", get=True, delete=True),
         _endpoint(f"{base}/shooting/control/shutterbutton", post=True),
         _endpoint(f"{base}/shooting/control/shutterbutton/manual", post=True),
         _endpoint(f"{base}/shooting/control/drivefocus", post=True),
@@ -383,16 +389,52 @@ def liveview_multipart_stop() -> dict[str, Any]:
 
 
 async def _scroll_frames() -> AsyncIterator[bytes]:
-    """Yield live-view frames in CCAPI's own binary framing.
+    """Yield bare, concatenated JPEGs.
 
-    Each frame is a header (marker, data-type, 4-byte length), then the JPEG,
-    then an end marker.
-
-    UNVERIFIED: the byte order of the 4-byte length is not something this
-    project has confirmed against a real body, which is one reason the multipart
-    endpoint is preferred. If you ever need this path, check it against your
-    reference first.
+    This is what ``scroll`` actually delivers: JPEG data split across HTTP
+    chunks with no framing of Canon's own. The binary framing with a length
+    header belongs to ``scrolldetail``, which is a different endpoint -- see
+    ``_scrolldetail_frames``.
     """
+    interval = 1.0 / LIVEVIEW_FPS
+    while state.liveview_active:
+        jpeg = await asyncio.to_thread(lambda: _encode_jpeg(_liveview_frame()))
+        yield jpeg
+        await asyncio.sleep(interval)
+
+
+@router.get("/shooting/liveview/scroll")
+def liveview_scroll() -> StreamingResponse:
+    """Continuous live view as chunked JPEG data.
+
+    Answers 503 "Already started" if a stream is already running, exactly as a
+    real body does -- that message is how a leftover session from a crashed
+    process announces itself, and code must recover from it.
+    """
+    _require_liveview()
+    if state.scroll_streaming:
+        raise HTTPException(status_code=503, detail={"message": "Already started"})
+    state.scroll_streaming = True
+
+    async def _stream() -> AsyncIterator[bytes]:
+        try:
+            async for chunk in _scroll_frames():
+                yield chunk
+        finally:
+            state.scroll_streaming = False
+
+    return StreamingResponse(_stream(), media_type="image/octet-stream")
+
+
+@router.delete("/shooting/liveview/scroll")
+def liveview_scroll_stop() -> dict[str, Any]:
+    """Stop chunked live-view transmission, clearing an 'Already started' state."""
+    state.scroll_streaming = False
+    return {}
+
+
+async def _scrolldetail_frames() -> AsyncIterator[bytes]:
+    """Yield frames in Canon's binary framing: marker, type, 4-byte length, data."""
     interval = 1.0 / LIVEVIEW_FPS
     while state.liveview_active:
         jpeg = await asyncio.to_thread(lambda: _encode_jpeg(_liveview_frame()))
@@ -400,11 +442,11 @@ async def _scroll_frames() -> AsyncIterator[bytes]:
         await asyncio.sleep(interval)
 
 
-@router.get("/shooting/liveview/scroll")
-def liveview_scroll() -> StreamingResponse:
-    """Continuous live view in Canon's binary chunk framing."""
+@router.get("/shooting/liveview/scrolldetail")
+def liveview_scrolldetail() -> StreamingResponse:
+    """Continuous live view in Canon's binary framing, with incidental info."""
     _require_liveview()
-    return StreamingResponse(_scroll_frames(), media_type="image/octet-stream")
+    return StreamingResponse(_scrolldetail_frames(), media_type="application/octet-stream")
 
 
 # ---------------------------------------------------------------------------

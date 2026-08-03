@@ -139,26 +139,29 @@ def make_negative(
         # B&W film base is not pure neutral; it carries a faint warm tint.
         frame = frame * np.array([1.0, 0.985, 0.96], dtype=np.float32)
 
-    frame = _apply_grain(frame, rng, grain)
-
-    if focus_error > 0:
-        frame = _blur(frame, int(round(focus_error)))
-
     # The rebate: unexposed film base framing the image. This is the reference
     # patch the colour pipeline samples, so it must be the mask colour at full
-    # transmission, with grain but no image content.
+    # transmission, with no image content.
     border_y = max(int(height * 0.06), 2)
     border_x = max(int(width * 0.05), 2)
     if color:
         base_color = np.array(_MASK_RGB, dtype=np.float32) / 255.0
     else:
         base_color = np.array([0.94, 0.93, 0.91], dtype=np.float32)
-    rebate = np.broadcast_to(base_color, (height, width, 3)).copy()
-    rebate = _apply_grain(rebate, rng, grain * 0.4)
 
     mask_area = np.ones((height, width), dtype=bool)
     mask_area[border_y : height - border_y, border_x : width - border_x] = False
-    frame[mask_area] = rebate[mask_area]
+    frame[mask_area] = np.broadcast_to(base_color, (height, width, 3))[mask_area]
+
+    # Grain, then defocus -- in that order and after the rebate is in place,
+    # because both are properties of the whole film frame. Compositing the
+    # rebate after the blur would leave the border permanently sharp, which
+    # would let a badly defocused frame still show strong edges and make any
+    # focus aid tested against it look like it worked.
+    frame = _apply_grain(frame, rng, grain)
+
+    if focus_error > 0:
+        frame = _blur(frame, int(round(focus_error)))
 
     # Convert RGB -> BGR at the last moment, so the maths above stays readable.
     bgr = np.clip(frame, 0.0, 1.0)[:, :, ::-1]

@@ -75,10 +75,28 @@ pytest
 |---|---|---|
 | Invert | <kbd>I</kbd> | Show a positive instead of a negative |
 | Loupe | <kbd>L</kbd> | Magnify a region to judge grain focus. Click the image to move it |
-| Camera zoom | — | 1× / 5× / 10× **on the camera**. Prefer this over software zoom |
+| Focus peaking | <kbd>P</kbd> | Mark the sharpest edges in red |
+| Focus near/far | <kbd>←</kbd> <kbd>→</kbd> | Drive focus. <kbd>Shift</kbd> = medium step, <kbd>Alt</kbd> = coarse |
+| Measure sharpness | <kbd>M</kbd> | Numeric focus reading for the loupe region, plus per-corner values |
 | Capture | <kbd>Space</kbd> | Settle, fire, download |
+| Camera zoom | — | 1× / 5× / 10× **on the camera**, where the body supports it |
 
-**Use camera zoom before software zoom.** Camera-side magnification returns real sensor detail; the software loupe can only enlarge pixels the camera already discarded when it downscaled the live-view stream. Both help, but they are not equivalent.
+**Focus peaking works in autofocus mode** — unlike the camera's own peaking, which only appears in manual focus. That matters because **CCAPI cannot drive focus when focus is manual**, so on the camera alone you must choose between peaking and remote focus control. Here you get both, because peaking is computed on the computer from the live-view stream.
+
+**The sharpness readout is relative, not absolute.** Turn focus and watch it peak; the bar is drawn against the best reading of the session. Comparing values between different negatives means nothing. The per-corner figures are useful on their own: if one corner sits consistently lower, your copy stand isn't parallel to the film.
+
+**Camera zoom beats software zoom where it exists.** Camera-side magnification returns real sensor detail; the software loupe can only enlarge pixels the camera already discarded when it downscaled the stream. Note that **not every body offers it** — the EOS R7 does not, so the loupe is the only magnification there. The control is hidden when unsupported.
+
+### What the app changes on your camera
+
+On connect it sets, and tells you it has:
+
+- **Electronic shutter** — no mechanical shock (falls back to electronic first curtain, then leaves it alone).
+- **Drive mode → single** — continuous drive turns one remote release into a burst.
+- **AF operation → one-shot** — servo AF keeps refocusing, so frames of a roll wouldn't share a focus distance.
+- **Auto power-off → disabled** — a sleeping camera looks exactly like a network fault.
+
+Set `capture.prepare_camera_for_scanning: false` in `config.yaml` if you'd rather it changed nothing.
 
 > **Colour negatives look cyan in v0.1.** The invert toggle is a plain linear flip, which is genuinely useful for black & white but leaves colour film with the inverse of its orange mask. Neutralising that mask properly is [v0.3](ROADMAP.md#v03--inversion-done-properly-bw-and-color) and needs a real pipeline, not a tweak. Your captured files are unaffected — inversion is preview-only for now, and the original is always kept.
 

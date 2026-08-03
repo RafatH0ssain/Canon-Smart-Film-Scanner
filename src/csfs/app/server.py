@@ -15,7 +15,7 @@ from __future__ import annotations
 import argparse
 import logging
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any, Iterator, Literal
 
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse, StreamingResponse
@@ -28,6 +28,8 @@ from csfs.config import Config, load_config
 from csfs.processing.codec import DecodeError, decode_jpeg, encode_jpeg
 from csfs.processing.invert import invert_linear
 from csfs.processing.loupe import crop_zoom
+from csfs.processing.peaking import apply_peaking
+from csfs.processing.sharpness import corner_sharpness, sharpness_of_region
 
 logger = logging.getLogger(__name__)
 
@@ -58,9 +60,25 @@ class PreviewRequest(BaseModel):
     loupe_zoom: float | None = Field(default=None, gt=0, le=32)
     loupe_x: float | None = Field(default=None, ge=0, le=1)
     loupe_y: float | None = Field(default=None, ge=0, le=1)
+    peaking: bool | None = None
+    peaking_sensitivity: float | None = Field(default=None, ge=0, le=1)
 
 
 class ZoomRequest(BaseModel):
+    value: str
+
+
+class FocusRequest(BaseModel):
+    """One focus increment. CCAPI moves focus in fixed steps, not by distance."""
+
+    direction: Literal["near", "far"]
+    size: Literal["fine", "medium", "coarse"] = "fine"
+
+
+class SettingRequest(BaseModel):
+    """Change one camera setting to a value the camera says it accepts."""
+
+    name: str
     value: str
 
 
@@ -100,7 +118,10 @@ def status() -> dict[str, Any]:
             "loupe_zoom": session.preview.loupe_zoom,
             "loupe_x": session.preview.loupe_x,
             "loupe_y": session.preview.loupe_y,
+            "peaking": session.preview.peaking,
+            "peaking_sensitivity": session.preview.peaking_sensitivity,
         },
+        "prepared": session.prepared,
         "streaming": session.pump is not None and session.pump.running,
         "stream_error": session.pump.error if session.pump is not None else None,
     }
@@ -108,8 +129,13 @@ def status() -> dict[str, Any]:
         payload["api_versions"] = sorted(caps.api_versions)
         payload["capabilities"] = sorted(caps.resolved)
         payload["has_camera_zoom"] = caps.has("lv_zoom")
-        payload["has_focus_drive"] = caps.has("focus_drive")
         payload["settings"] = session.read_settings()
+    if session.focus is not None:
+        payload["focus"] = {
+            "available": session.focus.available,
+            "reason": session.focus.unavailable_reason(),
+            "lens": session.focus.lens.description,
+        }
     return payload
 
 
@@ -150,6 +176,13 @@ def _render(frame_bytes: bytes) -> bytes | None:
 
     if session.preview.invert:
         image = invert_linear(image)
+
+    # Peaking must run at native resolution, BEFORE the loupe. The loupe
+    # enlarges with nearest-neighbour, so peaking a magnified frame would mark
+    # the hard edges of enlarged pixel blocks and light up the whole view
+    # regardless of focus.
+    if session.preview.peaking:
+        image = apply_peaking(image, sensitivity=session.preview.peaking_sensitivity)
 
     if session.preview.loupe:
         image = crop_zoom(
@@ -230,6 +263,100 @@ def set_camera_zoom(request: ZoomRequest) -> dict[str, Any]:
         raise HTTPException(
             status_code=400, detail=f"Camera would not accept zoom '{request.value}'."
         )
+    return status()
+
+
+# ---------------------------------------------------------------------------
+# Focus
+# ---------------------------------------------------------------------------
+
+
+@app.post("/api/focus")
+def drive_focus(request: FocusRequest) -> dict[str, Any]:
+    """Move focus one increment.
+
+    A refusal is reported as 409 with the reason, because the overwhelmingly
+    common cause -- the lens set to manual focus -- is something the user fixes
+    on the rig, not a server fault.
+    """
+    if not session.connected or session.focus is None:
+        raise HTTPException(status_code=409, detail="Not connected.")
+    if not session.focus.drive(request.direction, request.size):
+        raise HTTPException(
+            status_code=409,
+            detail=session.focus.unavailable_reason() or "Focus drive was refused.",
+        )
+    return {"ok": True}
+
+
+@app.post("/api/focus/recheck")
+def recheck_focus() -> dict[str, Any]:
+    """Look again after the user has moved the AF/MF switch."""
+    if not session.connected or session.focus is None:
+        raise HTTPException(status_code=409, detail="Not connected.")
+    session.focus.recheck()
+    return status()
+
+
+@app.get("/api/sharpness")
+def measure_sharpness() -> dict[str, Any]:
+    """Sharpness of the region the loupe is on, plus per-corner values.
+
+    Only meaningful relative to itself: turn focus and watch it rise. The corner
+    figures show whether the film plane is parallel to the sensor -- if one
+    corner is consistently lower, the stand needs levelling.
+    """
+    if session.pump is None:
+        raise HTTPException(status_code=409, detail="Not connected.")
+    result = session.pump.latest(after=0, timeout=5.0)
+    if result is None:
+        raise HTTPException(status_code=503, detail="No live-view frame available yet.")
+    try:
+        image = decode_jpeg(result[0])
+    except DecodeError:
+        raise HTTPException(status_code=503, detail="Frame could not be decoded.") from None
+
+    # Measured on the raw frame: inversion does not change edge contrast, and
+    # the loupe's nearest-neighbour enlargement would inflate the value.
+    value = sharpness_of_region(
+        image,
+        center_x=session.preview.loupe_x,
+        center_y=session.preview.loupe_y,
+        size=0.25,
+    )
+    session.note_sharpness(value)
+    return {
+        "sharpness": round(value, 2),
+        "best": round(session.best_sharpness, 2),
+        "corners": {k: round(v, 2) for k, v in corner_sharpness(image).items()},
+    }
+
+
+@app.post("/api/sharpness/reset")
+def reset_sharpness() -> dict[str, Any]:
+    """Forget the best-so-far reading, e.g. when moving to a new negative."""
+    session.best_sharpness = 0.0
+    return {"best": 0.0}
+
+
+# ---------------------------------------------------------------------------
+# Camera settings
+# ---------------------------------------------------------------------------
+
+
+@app.post("/api/setting")
+def set_setting(request: SettingRequest) -> dict[str, Any]:
+    """Change one camera setting.
+
+    The value must be one the camera reports as currently selectable; the same
+    setting accepts different values on different bodies and in different
+    exposure modes.
+    """
+    if not session.connected:
+        raise HTTPException(status_code=409, detail="Not connected.")
+    ok, reason = session.write_setting(request.name, request.value)
+    if not ok:
+        raise HTTPException(status_code=400, detail=reason)
     return status()
 
 

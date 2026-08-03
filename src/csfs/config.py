@@ -54,6 +54,12 @@ class CaptureConfig:
     output_dir: str = "captures"
     delete_from_camera_after_download: bool = False
 
+    # On connect, set drive mode to single and AF operation to one-shot.
+    # Continuous drive turns one remote release into a burst, and servo AF keeps
+    # refocusing between frames of a roll. Both are written to the camera, so
+    # set this false if you would rather the app never changed your settings.
+    prepare_camera_for_scanning: bool = True
+
     def resolved_output_dir(self) -> Path:
         """Absolute output directory, resolving relative paths against the repo."""
         p = Path(self.output_dir)

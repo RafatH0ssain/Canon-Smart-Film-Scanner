@@ -190,21 +190,28 @@ def test_event_polling_reports_the_new_capture(client: CCAPIClient) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_focus_drive_moves_and_clamps(client: CCAPIClient) -> None:
+def test_focus_drive_accepts_the_documented_values(client: CCAPIClient) -> None:
+    """CCAPI drives focus in six fixed increments via a single 'value' field."""
     caps = discover(client)
     path = caps.path("focus_drive")
-
-    assert client.post(path, json={"direction": "far", "steps": 3}).json()["position"] == 3
-    assert client.post(path, json={"direction": "near", "steps": 1}).json()["position"] == 2
-
-    # Real lenses hit a hard stop; callers must not assume infinite travel.
-    assert client.post(path, json={"direction": "far", "steps": 500}).json()["position"] == 40
+    for value in ("near1", "near2", "near3", "far1", "far2", "far3"):
+        assert client.post(path, json={"value": value}).json() == {}
 
 
-def test_focus_drive_rejects_a_bad_direction(client: CCAPIClient) -> None:
+def test_focus_drive_rejects_an_invented_payload(client: CCAPIClient) -> None:
+    """Guards against reintroducing the {direction, steps} shape this project
+    once invented before checking the reference."""
     caps = discover(client)
     response = client.post(
-        caps.path("focus_drive"), json={"direction": "sideways"}, expect_status=False
+        caps.path("focus_drive"), json={"direction": "near", "steps": 3}, expect_status=False
+    )
+    assert response.status_code == 400
+
+
+def test_focus_drive_rejects_an_unknown_value(client: CCAPIClient) -> None:
+    caps = discover(client)
+    response = client.post(
+        caps.path("focus_drive"), json={"value": "sideways1"}, expect_status=False
     )
     assert response.status_code == 400
 
@@ -241,7 +248,8 @@ def test_defocusing_reduces_measured_sharpness(client: CCAPIClient) -> None:
         return float(cv2.Laplacian(gray, cv2.CV_64F).var())
 
     sharp = acutance()
-    client.post(caps.path("focus_drive"), json={"direction": "far", "steps": 30})
+    for _ in range(3):
+        client.post(caps.path("focus_drive"), json={"value": "far3"})
     assert acutance() < sharp
 
 
@@ -253,7 +261,8 @@ def test_camera_zoom_reveals_detail_software_zoom_cannot(client: CCAPIClient) ->
     """
     caps = discover(client)
     _start_liveview(client, caps)
-    client.post(caps.path("focus_drive"), json={"direction": "far", "steps": 20})
+    for _ in range(2):
+        client.post(caps.path("focus_drive"), json={"value": "far3"})
 
     def acutance() -> float:
         frame = _decode(client.get(caps.path("liveview_flip")).content)

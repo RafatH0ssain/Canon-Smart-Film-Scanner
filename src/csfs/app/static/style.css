@@ -256,6 +256,83 @@ button.big kbd {
 .capture-status.ok   { color: var(--ok); }
 .capture-status.bad  { color: var(--bad); }
 
+/* ---------- focus drive ---------- */
+
+.focus-grid {
+  display: grid;
+  grid-template-columns: repeat(6, 1fr);
+  gap: 4px;
+  margin-bottom: 8px;
+}
+.focus-grid button {
+  padding: 9px 0;
+  font-size: 13px;
+}
+/* The two innermost buttons are the fine steps you reach for most. */
+.focus-grid button[data-size="fine"] { border-color: var(--accent-dim); }
+
+.warn {
+  background: var(--panel-2);
+  border: 1px solid var(--accent-dim);
+  border-radius: var(--radius);
+  padding: 10px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.warn p { margin: 0 0 8px; }
+
+kbd {
+  font: inherit;
+  font-size: 11px;
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  padding: 0 4px;
+  color: var(--muted);
+}
+
+/* ---------- sharpness ---------- */
+
+.meter {
+  height: 8px;
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  overflow: hidden;
+  margin: 10px 0 6px;
+}
+.meter-fill {
+  height: 100%;
+  width: 0;
+  background: var(--accent);
+  transition: width 0.15s ease-out;
+}
+
+/* ---------- settings controls ---------- */
+
+.setting {
+  display: grid;
+  grid-template-columns: 88px 1fr;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 7px;
+}
+.setting label {
+  font-size: 12px;
+  color: var(--muted);
+}
+.setting select {
+  background: var(--panel-2);
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 5px 7px;
+  font: inherit;
+  font-size: 13px;
+  width: 100%;
+}
+.setting select:disabled { opacity: 0.5; }
+
 /* ---------- captures ---------- */
 
 .captures {

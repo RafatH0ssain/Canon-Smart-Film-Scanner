@@ -19,6 +19,23 @@ const el = {
   zoomValue: $("zoom-value"),
   cameraZoomBlock: $("camera-zoom-block"),
   cameraZoom: $("camera-zoom"),
+  peaking: $("peaking"),
+  peakingSensitivity: $("peaking-sensitivity"),
+  peakingValue: $("peaking-value"),
+  focusControls: $("focus-controls"),
+  focusUnavailable: $("focus-unavailable"),
+  focusReason: $("focus-reason"),
+  focusRecheck: $("focus-recheck"),
+  lensName: $("lens-name"),
+  measure: $("measure"),
+  sharpnessBlock: $("sharpness-block"),
+  sharpnessBar: $("sharpness-bar"),
+  sharpnessNow: $("sharpness-now"),
+  sharpnessBest: $("sharpness-best"),
+  sharpnessReset: $("sharpness-reset"),
+  corners: $("corners"),
+  settingsControls: $("settings-controls"),
+  preparedNote: $("prepared-note"),
   capture: $("capture"),
   captureStatus: $("capture-status"),
   settle: $("settle"),
@@ -69,9 +86,11 @@ const post = (path, body) =>
 const SETTING_LABELS = {
   iso: "ISO",
   aperture: "Aperture",
-  shutter_speed: "Shutter speed",
-  white_balance: "White balance",
+  shutter_speed: "Shutter",
+  white_balance: "White bal.",
   shutter_mode: "Shutter mode",
+  af_operation: "AF operation",
+  drive_mode: "Drive mode",
 };
 
 function render(state) {
@@ -102,18 +121,64 @@ function render(state) {
 
   el.cameraZoomBlock.hidden = !state.has_camera_zoom;
 
+  el.peaking.checked = state.preview.peaking;
+  el.peakingSensitivity.value = state.preview.peaking_sensitivity;
+  el.peakingValue.textContent =
+    `${Math.round(state.preview.peaking_sensitivity * 100)}%`;
+
+  el.measure.disabled = !state.streaming;
+  renderFocus(state.focus);
   renderSettings(state.settings ?? {});
+  renderPrepared(state.prepared ?? {});
+}
+
+function renderFocus(focus) {
+  if (!focus) {
+    el.focusControls.hidden = true;
+    el.focusUnavailable.hidden = true;
+    return;
+  }
+  el.focusControls.hidden = !focus.available;
+  el.focusUnavailable.hidden = focus.available;
+  el.lensName.textContent = focus.lens;
+  if (!focus.available) el.focusReason.textContent = focus.reason ?? "";
+}
+
+function renderPrepared(prepared) {
+  const names = Object.keys(prepared);
+  el.preparedNote.hidden = names.length === 0;
+  if (names.length === 0) return;
+  const changes = names
+    .map((n) => `${SETTING_LABELS[n] ?? n} → ${prepared[n]}`)
+    .join(", ");
+  el.preparedNote.textContent = `Changed on your camera for scanning: ${changes}`;
 }
 
 function renderSettings(settings) {
   const names = Object.keys(settings);
   if (names.length === 0) {
-    el.settings.innerHTML = `<dt class="empty">&mdash;</dt><dd></dd>`;
+    el.settingsControls.innerHTML = `<p class="note">Not connected.</p>`;
     return;
   }
-  el.settings.innerHTML = names.map((name) => {
+  // Rebuilding the controls on every poll would fight the user mid-selection,
+  // so only redraw when the set of settings or their options actually changes.
+  const signature = JSON.stringify(settings);
+  if (el.settingsControls.dataset.signature === signature) return;
+  el.settingsControls.dataset.signature = signature;
+
+  el.settingsControls.innerHTML = names.map((name) => {
+    const { value, ability } = settings[name];
     const label = SETTING_LABELS[name] ?? name;
-    return `<dt>${label}</dt><dd>${settings[name].value}</dd>`;
+    if (!ability || ability.length <= 1) {
+      // Not selectable right now -- e.g. exposure compensation in manual mode.
+      return `<div class="setting"><label>${label}</label>
+              <select disabled><option>${value}</option></select></div>`;
+    }
+    const options = ability
+      .map((v) => `<option${v === value ? " selected" : ""}>${v}</option>`)
+      .join("");
+    return `<div class="setting"><label>${label}</label>
+            <select data-setting="${name}">${options}</select></div>`;
   }).join("");
 }
 
@@ -216,9 +281,102 @@ async function capture() {
 
 el.capture.addEventListener("click", capture);
 
+/* ---------- peaking ---------- */
+
+el.peaking.addEventListener("change", () => setPreview({ peaking: el.peaking.checked }));
+
+el.peakingSensitivity.addEventListener("input", () => {
+  el.peakingValue.textContent = `${Math.round(el.peakingSensitivity.value * 100)}%`;
+});
+el.peakingSensitivity.addEventListener("change", () =>
+  setPreview({ peaking_sensitivity: Number(el.peakingSensitivity.value), peaking: true }));
+
+/* ---------- focus drive ---------- */
+
+async function driveFocus(direction, size) {
+  try {
+    await post("/api/focus", { direction, size });
+  } catch (err) {
+    toast(err.message);
+    refresh();   // the controller may now know focus drive is unavailable
+  }
+}
+
+el.focusControls.addEventListener("click", (event) => {
+  const button = event.target.closest("button");
+  if (!button) return;
+  driveFocus(button.dataset.dir, button.dataset.size);
+});
+
+el.focusRecheck.addEventListener("click", async () => {
+  try {
+    render(await post("/api/focus/recheck"));
+  } catch (err) {
+    toast(err.message);
+  }
+});
+
+/* ---------- sharpness ---------- */
+
+// Scales the bar. Laplacian variance has no natural maximum, so the bar is
+// drawn relative to the best reading of this session -- which is the only
+// comparison that means anything anyway.
+function renderSharpness(data) {
+  el.sharpnessBlock.hidden = false;
+  el.sharpnessNow.textContent = data.sharpness.toFixed(1);
+  el.sharpnessBest.textContent = data.best.toFixed(1);
+  const ratio = data.best > 0 ? Math.min(data.sharpness / data.best, 1) : 0;
+  el.sharpnessBar.style.width = `${ratio * 100}%`;
+
+  el.corners.innerHTML = Object.entries(data.corners)
+    .map(([k, v]) => `<dt>${k.replace(/_/g, " ")}</dt><dd>${v.toFixed(0)}</dd>`)
+    .join("");
+}
+
+async function measureSharpness() {
+  try {
+    renderSharpness(await api("/api/sharpness"));
+  } catch (err) {
+    toast(err.message);
+  }
+}
+
+el.measure.addEventListener("click", measureSharpness);
+el.sharpnessReset.addEventListener("click", async () => {
+  await post("/api/sharpness/reset");
+  measureSharpness();
+});
+
+/* ---------- camera settings ---------- */
+
+el.settingsControls.addEventListener("change", async (event) => {
+  const select = event.target.closest("select[data-setting]");
+  if (!select) return;
+  try {
+    render(await post("/api/setting", {
+      name: select.dataset.setting,
+      value: select.value,
+    }));
+  } catch (err) {
+    toast(err.message);
+    refresh();   // put the control back to what the camera actually has
+  }
+});
+
+/* ---------- keyboard ---------- */
+
 document.addEventListener("keydown", (event) => {
   // Ignore shortcuts while typing, and let the browser keep its own combos.
-  if (event.target.matches("input, textarea") || event.metaKey || event.ctrlKey) return;
+  if (event.target.matches("input, textarea, select") || event.metaKey || event.ctrlKey) return;
+
+  // Focus stepping: modifiers pick the step size, so one pair of keys covers
+  // fine, medium and coarse without needing six bindings.
+  if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
+    event.preventDefault();
+    const size = event.altKey ? "coarse" : event.shiftKey ? "medium" : "fine";
+    driveFocus(event.key === "ArrowLeft" ? "near" : "far", size);
+    return;
+  }
 
   if (event.code === "Space") {
     event.preventDefault();   // stop Space scrolling the page
@@ -229,6 +387,11 @@ document.addEventListener("keydown", (event) => {
   } else if (event.key === "l") {
     el.loupe.checked = !el.loupe.checked;
     setPreview({ loupe: el.loupe.checked });
+  } else if (event.key === "p") {
+    el.peaking.checked = !el.peaking.checked;
+    setPreview({ peaking: el.peaking.checked });
+  } else if (event.key === "m") {
+    measureSharpness();
   }
 });
 

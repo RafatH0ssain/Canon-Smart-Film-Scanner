@@ -11,6 +11,7 @@ from typing import Iterator
 
 import numpy as np
 import pytest
+import requests
 from fastapi.testclient import TestClient
 
 from csfs.app import server as server_module
@@ -188,6 +189,152 @@ def test_captures_listing_hides_partial_downloads(ui: TestClient, tmp_path: Path
     (tmp_path / "IMG_9999.JPG.part").write_bytes(b"incomplete")
     files = ui.get("/api/captures").json()["files"]
     assert not any(name.endswith(".part") for name in files)
+
+
+# ---------------------------------------------------------------------------
+# v0.2: focus aids, focus drive, settings
+# ---------------------------------------------------------------------------
+
+
+def test_peaking_changes_the_served_frame(ui: TestClient) -> None:
+    ui.post("/api/connect")
+    plain = decode_jpeg(ui.get("/frame.jpg").content)
+
+    ui.post("/api/preview", json={"peaking": True})
+    peaked = decode_jpeg(ui.get("/frame.jpg").content)
+
+    assert peaked.shape == plain.shape
+    assert not np.array_equal(peaked, plain)
+
+
+def test_peaking_is_off_by_default(ui: TestClient) -> None:
+    """An overlay that is always on stops being information."""
+    assert ui.get("/api/status").json()["preview"]["peaking"] is False
+
+
+def test_peaking_sensitivity_is_validated(ui: TestClient) -> None:
+    assert ui.post("/api/preview", json={"peaking_sensitivity": 2.0}).status_code == 422
+    assert ui.post("/api/preview", json={"peaking_sensitivity": -0.1}).status_code == 422
+
+
+def test_focus_drive_is_reported_available_with_an_af_lens(ui: TestClient) -> None:
+    body = ui.post("/api/connect").json()
+    assert body["focus"]["available"] is True
+    assert "MACRO" in body["focus"]["lens"]
+
+
+def test_focus_drive_moves_focus(ui: TestClient) -> None:
+    ui.post("/api/connect")
+    assert ui.post("/api/focus", json={"direction": "near", "size": "fine"}).status_code == 200
+    assert ui.post("/api/focus", json={"direction": "far", "size": "coarse"}).status_code == 200
+
+
+def test_focus_drive_rejects_an_invalid_direction(ui: TestClient) -> None:
+    ui.post("/api/connect")
+    assert ui.post("/api/focus", json={"direction": "up"}).status_code == 422
+
+
+def test_focus_drive_requires_a_connection(ui: TestClient) -> None:
+    assert ui.post("/api/focus", json={"direction": "near"}).status_code == 409
+
+
+def test_manual_focus_is_reported_with_a_reason(ui: TestClient, mock_camera_url: str) -> None:
+    """The UI must hide controls that cannot work, and say why."""
+    ui.post("/api/connect")
+    requests.post(f"{mock_camera_url}/__mock/lens", json={"manual_focus": True}, timeout=5)
+
+    response = ui.post("/api/focus", json={"direction": "near"})
+    assert response.status_code == 409
+    assert "manual focus" in response.json()["detail"].lower()
+
+    focus = ui.get("/api/status").json()["focus"]
+    assert focus["available"] is False
+
+
+def test_focus_recheck_recovers_after_switching_back_to_af(
+    ui: TestClient, mock_camera_url: str
+) -> None:
+    ui.post("/api/connect")
+    requests.post(f"{mock_camera_url}/__mock/lens", json={"manual_focus": True}, timeout=5)
+    ui.post("/api/focus", json={"direction": "near"})
+    assert ui.get("/api/status").json()["focus"]["available"] is False
+
+    requests.post(f"{mock_camera_url}/__mock/lens", json={"manual_focus": False}, timeout=5)
+    assert ui.post("/api/focus/recheck").json()["focus"]["available"] is True
+
+
+def test_connect_prepares_the_camera_for_scanning(ui: TestClient) -> None:
+    """Continuous drive would turn one release into a burst."""
+    body = ui.post("/api/connect").json()
+    assert body["prepared"] == {"drive_mode": "single", "af_operation": "oneshot"}
+    assert body["settings"]["drive_mode"]["value"] == "single"
+    assert body["settings"]["af_operation"]["value"] == "oneshot"
+
+
+def test_preparation_can_be_switched_off(ui: TestClient) -> None:
+    """It writes to the user's camera, so it must be refusable."""
+    server_module.session.config.capture.prepare_camera_for_scanning = False
+    try:
+        body = ui.post("/api/connect").json()
+        assert body["prepared"] == {}
+        assert body["settings"]["drive_mode"]["value"] == "lowspeed"
+    finally:
+        server_module.session.config.capture.prepare_camera_for_scanning = True
+
+
+def test_sharpness_reports_current_best_and_corners(ui: TestClient) -> None:
+    ui.post("/api/connect")
+    body = ui.get("/api/sharpness").json()
+    assert body["sharpness"] > 0
+    assert body["best"] >= body["sharpness"]
+    assert set(body["corners"]) == {
+        "top_left", "top_right", "bottom_left", "bottom_right", "center"
+    }
+
+
+def test_sharpness_best_is_retained_then_resettable(ui: TestClient) -> None:
+    """Focusing is a hill-climb; the best so far is what makes a reading readable."""
+    ui.post("/api/connect")
+    first = ui.get("/api/sharpness").json()
+    assert ui.get("/api/sharpness").json()["best"] >= first["sharpness"]
+
+    assert ui.post("/api/sharpness/reset").json()["best"] == 0.0
+
+
+def test_sharpness_requires_a_connection(ui: TestClient) -> None:
+    assert ui.get("/api/sharpness").status_code == 409
+
+
+def test_setting_can_be_changed(ui: TestClient) -> None:
+    ui.post("/api/connect")
+    body = ui.post("/api/setting", json={"name": "iso", "value": "800"}).json()
+    assert body["settings"]["iso"]["value"] == "800"
+
+
+def test_setting_rejects_a_value_the_camera_will_not_take(ui: TestClient) -> None:
+    ui.post("/api/connect")
+    response = ui.post("/api/setting", json={"name": "iso", "value": "999999"})
+    assert response.status_code == 400
+    assert "offers" in response.json()["detail"]
+
+
+def test_setting_rejects_an_unknown_setting_name(ui: TestClient) -> None:
+    """An allow-list, so a typo cannot reach the camera as something else."""
+    ui.post("/api/connect")
+    response = ui.post("/api/setting", json={"name": "sensorcleaning", "value": "on"})
+    assert response.status_code == 400
+
+
+def test_setting_requires_a_connection(ui: TestClient) -> None:
+    assert ui.post("/api/setting", json={"name": "iso", "value": "800"}).status_code == 409
+
+
+def test_status_reports_settings_with_their_selectable_values(ui: TestClient) -> None:
+    """The UI builds dropdowns from these, so they must be present."""
+    body = ui.post("/api/connect").json()
+    iso = body["settings"]["iso"]
+    assert iso["value"]
+    assert len(iso["ability"]) > 1
 
 
 def test_disconnect_stops_streaming(ui: TestClient) -> None:

@@ -58,6 +58,15 @@ capture:
   # Default is false: keeping the original on the card is the safer choice.
   delete_from_camera_after_download: false
 
+  # On connect, put two settings into the state scanning needs:
+  #   drive mode   -> single   (continuous drive turns one remote release into
+  #                             a burst of near-identical frames)
+  #   AF operation -> oneshot  (servo AF keeps refocusing, so frames of a roll
+  #                             are no longer captured at the same distance)
+  # These are written to your camera. Set false if you would rather the app
+  # never changed your settings; it will still report them.
+  prepare_camera_for_scanning: true
+
 film:
   # Which inversion pipeline the preview uses by default: "bw" or "color".
   # Both are first-class. This is only the startup default; the UI can switch.

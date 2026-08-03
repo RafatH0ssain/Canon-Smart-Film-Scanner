@@ -40,15 +40,29 @@
       </div>
 
       <div class="group">
-        <h2>Focus</h2>
+        <h2>Focus aids</h2>
         <label class="row">
           <input type="checkbox" id="loupe">
-          <span>Magnified loupe</span>
+          <span>Magnified loupe <kbd>L</kbd></span>
         </label>
         <label class="row stacked">
           <span>Software zoom <output id="zoom-value">4.0&times;</output></span>
           <input type="range" id="zoom" min="1" max="12" step="0.5" value="4">
         </label>
+
+        <label class="row">
+          <input type="checkbox" id="peaking">
+          <span>Focus peaking <kbd>P</kbd></span>
+        </label>
+        <label class="row stacked">
+          <span>Sensitivity <output id="peaking-value">50%</output></span>
+          <input type="range" id="peaking-sensitivity" min="0" max="1" step="0.05" value="0.5">
+        </label>
+        <p class="note">
+          Sharp edges are marked red. Works in autofocus mode, unlike the
+          camera's own peaking &mdash; so you can drive focus and see peaking
+          at the same time.
+        </p>
 
         <div id="camera-zoom-block" hidden>
           <label class="row stacked">
@@ -59,10 +73,47 @@
               <button data-value="10">10&times;</button>
             </div>
           </label>
+        </div>
+      </div>
+
+      <div class="group">
+        <h2>Focus drive</h2>
+        <div id="focus-controls" hidden>
+          <p class="note" id="lens-name">&mdash;</p>
+          <div class="focus-grid">
+            <button data-dir="near" data-size="coarse" title="Near, large step">&laquo;&laquo;</button>
+            <button data-dir="near" data-size="medium" title="Near, medium step">&laquo;</button>
+            <button data-dir="near" data-size="fine" title="Near, small step">&lsaquo;</button>
+            <button data-dir="far" data-size="fine" title="Far, small step">&rsaquo;</button>
+            <button data-dir="far" data-size="medium" title="Far, medium step">&raquo;</button>
+            <button data-dir="far" data-size="coarse" title="Far, large step">&raquo;&raquo;</button>
+          </div>
           <p class="note">
-            Camera zoom shows real sensor detail. Software zoom only enlarges
-            pixels the camera already discarded &mdash; use camera zoom first.
+            <kbd>&larr;</kbd><kbd>&rarr;</kbd> fine &middot;
+            <kbd>Shift</kbd> medium &middot; <kbd>Alt</kbd> coarse
           </p>
+        </div>
+        <div id="focus-unavailable" class="warn" hidden>
+          <p id="focus-reason"></p>
+          <button id="focus-recheck">Check again</button>
+        </div>
+      </div>
+
+      <div class="group">
+        <h2>Sharpness</h2>
+        <button id="measure" disabled>Measure loupe region</button>
+        <div id="sharpness-block" hidden>
+          <div class="meter"><div class="meter-fill" id="sharpness-bar"></div></div>
+          <dl class="facts">
+            <dt>Now</dt><dd id="sharpness-now">&mdash;</dd>
+            <dt>Best</dt><dd id="sharpness-best">&mdash;</dd>
+          </dl>
+          <p class="note">
+            Relative only &mdash; turn focus and watch it peak. Corner values
+            reveal whether the film plane is parallel to the sensor.
+          </p>
+          <dl class="facts" id="corners"></dl>
+          <button id="sharpness-reset">Reset best</button>
         </div>
       </div>
 
@@ -80,8 +131,9 @@
       </div>
 
       <div class="group">
-        <h2>Camera</h2>
-        <dl class="facts" id="settings"></dl>
+        <h2>Camera settings</h2>
+        <div id="settings-controls"></div>
+        <p class="note" id="prepared-note" hidden></p>
       </div>
 
       <div class="group">

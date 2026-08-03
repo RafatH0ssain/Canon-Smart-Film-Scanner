@@ -23,6 +23,7 @@ from pathlib import Path
 
 from csfs.ccapi import CCAPIClient, Capabilities, discover
 from csfs.ccapi import contents as contents_api
+from csfs.ccapi import focus as focus_api
 from csfs.ccapi import settings as settings_api
 from csfs.ccapi import shutter as shutter_api
 from csfs.ccapi.errors import CCAPIError
@@ -33,7 +34,19 @@ logger = logging.getLogger(__name__)
 
 # Settings surfaced in the UI. Each is optional -- a body that lacks one simply
 # does not show it.
-_REPORTED_SETTINGS = ("iso", "aperture", "shutter_speed", "white_balance", "shutter_mode")
+_REPORTED_SETTINGS = (
+    "iso", "aperture", "shutter_speed", "white_balance",
+    "shutter_mode", "af_operation", "drive_mode",
+)
+
+# Settings the UI may change. Deliberately a short allow-list: these are the
+# ones that matter for scanning and are simple flat values. Others -- image
+# quality reports a nested {raw, heif} object rather than a single value --
+# need their own handling and are not exposed by accident.
+_WRITABLE_SETTINGS = frozenset(
+    {"iso", "aperture", "shutter_speed", "white_balance", "shutter_mode",
+     "af_operation", "drive_mode"}
+)
 
 
 @dataclass
@@ -45,6 +58,8 @@ class PreviewSettings:
     loupe_zoom: float = 4.0
     loupe_x: float = 0.5
     loupe_y: float = 0.5
+    peaking: bool = False
+    peaking_sensitivity: float = 0.5
 
 
 class FramePump:
@@ -133,6 +148,13 @@ class ScanSession:
     preview: PreviewSettings = field(default_factory=PreviewSettings)
     shutter_mode: str | None = None
     last_capture: str | None = None
+    focus: focus_api.FocusController | None = None
+    # Settings the app changed on the camera at connect time, so the UI can say
+    # plainly what it touched rather than silently reconfiguring someone's body.
+    prepared: dict[str, str] = field(default_factory=dict)
+    # Best sharpness seen since the last reset. Focusing is a hill-climb, so a
+    # reading only means something next to the best found so far.
+    best_sharpness: float = 0.0
     _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
 
     @property
@@ -170,6 +192,19 @@ class ScanSession:
             self.shutter_mode = shutter_api.select_quietest_shutter(client, capabilities)
         settings_api.disable_auto_power_off(client, capabilities)
 
+        if self.config.capture.prepare_camera_for_scanning:
+            # Changes the user's camera, so it is announced and switchable off.
+            self.prepared = focus_api.prepare_for_scanning(client, capabilities)
+            if self.prepared:
+                logger.info(
+                    "Adjusted for scanning: %s",
+                    ", ".join(f"{k}={v}" for k, v in self.prepared.items()),
+                )
+        else:
+            self.prepared = {}
+
+        self.focus = focus_api.FocusController(client, capabilities)
+
         self.live_view = LiveView(client, capabilities)
         self.live_view.start()
         self.pump = FramePump(self.live_view)
@@ -189,6 +224,8 @@ class ScanSession:
             self.client = None
         self.capabilities = None
         self.shutter_mode = None
+        self.focus = None
+        self.prepared = {}
 
     # -- actions ------------------------------------------------------------
 
@@ -266,6 +303,37 @@ class ScanSession:
         return {
             name: {"value": s.value, "ability": list(s.ability)} for name, s in found.items()
         }
+
+    def note_sharpness(self, value: float) -> None:
+        """Record a sharpness reading, keeping the best seen.
+
+        Focusing is a hill-climb: you turn past the peak and come back. Knowing
+        the best value so far is what makes the current reading interpretable.
+        """
+        self.best_sharpness = max(self.best_sharpness, value)
+
+    def write_setting(self, name: str, value: str) -> tuple[bool, str]:
+        """Change one camera setting. Returns ``(ok, reason_if_not)``."""
+        if not self.connected:
+            return False, "Not connected."
+        assert self.client is not None and self.capabilities is not None
+
+        if name not in _WRITABLE_SETTINGS:
+            return False, f"'{name}' is not a setting this app changes."
+        if not self.capabilities.has(name):
+            return False, f"This camera does not expose '{name}'."
+
+        # Check against what the camera says it will accept right now, so the
+        # user gets a clear reason instead of a bare rejection from the body.
+        current = settings_api.read_setting(self.client, self.capabilities, name)
+        if current is not None and not current.can_set(value):
+            return False, (
+                f"The camera will not accept {name}={value} in its current mode. "
+                f"It offers: {', '.join(current.ability)}"
+            )
+        if settings_api.write_setting(self.client, self.capabilities, name, value):
+            return True, ""
+        return False, f"The camera refused {name}={value}."
 
     def set_camera_zoom(self, value: str) -> bool:
         """Set camera-side live-view magnification.

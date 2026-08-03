@@ -122,6 +122,16 @@ class MockCameraState:
     lens_mounted: bool = True
     lens_name: str = "RF100mm F2.8 L MACRO IS USM (mock)"
 
+    # Stands in for the lens AF/MF switch. CCAPI cannot drive focus when focus
+    # is manual, which is the whole reason this project does its own peaking.
+    manual_focus: bool = False
+
+    # Defaults chosen to be wrong for scanning on purpose: a real body is very
+    # likely to arrive on continuous drive and servo AF, and code that assumes
+    # sane defaults would pass here and fire bursts at the copy stand.
+    drive_mode: str = "lowspeed"
+    af_operation: str = "servo"
+
     iso: str = "100"
     av: str = "8.0"
     tv: str = "1/125"
@@ -237,6 +247,8 @@ def _endpoints_for(base: str, *, modern: bool) -> list[dict[str, Any]]:
         _endpoint(f"{base}/shooting/settings/av", get=True, put=True),
         _endpoint(f"{base}/shooting/settings/tv", get=True, put=True),
         _endpoint(f"{base}/shooting/settings/wb", get=True, put=True),
+        _endpoint(f"{base}/shooting/settings/afoperation", get=True, put=True),
+        _endpoint(f"{base}/shooting/settings/drive", get=True, put=True),
         _endpoint(f"{base}/functions/autopoweroff", get=True, put=True),
         _endpoint(f"{base}/event/polling", get=True),
         _endpoint(f"{base}/contents", get=True),
@@ -503,32 +515,41 @@ def af_control(payload: dict[str, Any] | None = None) -> dict[str, Any]:
     return {}
 
 
+# CCAPI drives focus in six fixed increments, not by an arbitrary step count.
+_FOCUS_STEPS = {
+    "near1": -1, "near2": -5, "near3": -15,
+    "far1": 1, "far2": 5, "far3": 15,
+}
+
+
 @router.post("/shooting/control/drivefocus")
 def drive_focus(payload: dict[str, Any] | None = None) -> dict[str, Any]:
-    """Step focus. ``{"direction": "near"|"far", "steps": int}``.
+    """Drive focus one increment. ``{"value": "near1".."far3"}``.
 
-    A real AF lens has finite travel, so the position is clamped: code that
-    assumes it can always step further needs to handle the limit. A manual lens
-    cannot be driven at all, which the mock simulates when no lens is mounted.
+    Refuses when focus is manual, as a real body does -- that is the constraint
+    that makes the camera's own peaking and remote focus drive mutually
+    exclusive, and it needs to be reproducible without unplugging a lens.
+
+    A real lens has finite travel, so the position is clamped: code that assumes
+    it can always drive further has to handle the limit.
     """
     payload = payload or {}
     if not state.lens_mounted:
         raise HTTPException(
-            status_code=503, detail={"message": "Device busy: focus cannot be driven"}
+            status_code=503, detail={"message": "Device busy: no lens"}
         )
-    direction = str(payload.get("direction", "near")).lower()
-    if direction not in {"near", "far"}:
-        raise HTTPException(status_code=400, detail={"message": "Invalid parameter: direction"})
-    try:
-        steps = int(payload.get("steps", 1))
-    except (TypeError, ValueError):
+    if state.manual_focus:
         raise HTTPException(
-            status_code=400, detail={"message": "Invalid parameter: steps"}
-        ) from None
+            status_code=503,
+            detail={"message": "Device busy: focus drive does not operate in manual focus"},
+        )
 
-    delta = steps if direction == "far" else -steps
-    state.focus_position = max(-40, min(40, state.focus_position + delta))
-    return {"position": state.focus_position}
+    value = str(payload.get("value", ""))
+    if value not in _FOCUS_STEPS:
+        raise HTTPException(status_code=400, detail={"message": "Invalid parameter"})
+
+    state.focus_position = max(-40, min(40, state.focus_position + _FOCUS_STEPS[value]))
+    return {}
 
 
 # ---------------------------------------------------------------------------
@@ -537,10 +558,14 @@ def drive_focus(payload: dict[str, Any] | None = None) -> dict[str, Any]:
 
 # setting name -> (state attribute, selectable values)
 _COMMON_SETTINGS = {
-    "iso": ("iso", ["100", "200", "400", "800", "1600"]),
-    "av": ("av", ["2.8", "4.0", "5.6", "8.0", "11", "16"]),
-    "tv": ("tv", ["1/30", "1/60", "1/125", "1/250", "1/500"]),
-    "wb": ("wb", ["auto", "daylight", "tungsten"]),
+    # Value spellings match a real body: apertures carry an "f" prefix and
+    # shutter speeds use quote marks for whole seconds.
+    "iso": ("iso", ["auto", "100", "200", "400", "800", "1600", "3200", "6400"]),
+    "av": ("av", ["f2.0", "f2.8", "f4.0", "f5.6", "f8.0", "f11", "f16", "f22"]),
+    "tv": ("tv", ['1"', "1/30", "1/60", "1/125", "1/200", "1/250", "1/500"]),
+    "wb": ("wb", ["auto", "daylight", "shade", "cloudy", "tungsten", "flash"]),
+    "afoperation": ("af_operation", ["oneshot", "servo"]),
+    "drive": ("drive_mode", ["single", "highspeed", "lowspeed", "self_10sec", "self_2sec"]),
 }
 _MODERN_SETTINGS = {
     "shuttermode": ("shutter_mode", ["elec_1st_curtain", "mechanical", "electronic"]),
@@ -712,9 +737,16 @@ def set_body_profile(payload: dict[str, Any]) -> dict[str, Any]:
 
 @app.post("/__mock/lens")
 def set_lens(payload: dict[str, Any]) -> dict[str, Any]:
-    """Attach or detach the lens, to exercise the manual-lens fallback."""
-    state.lens_mounted = bool(payload.get("mounted", True))
-    return {"message": "ok", "mounted": state.lens_mounted}
+    """Attach or detach the lens, and set the AF/MF switch. Test helper only."""
+    if "mounted" in payload:
+        state.lens_mounted = bool(payload["mounted"])
+    if "manual_focus" in payload:
+        state.manual_focus = bool(payload["manual_focus"])
+    return {
+        "message": "ok",
+        "mounted": state.lens_mounted,
+        "manual_focus": state.manual_focus,
+    }
 
 
 @app.get("/__mock/needs-auth")

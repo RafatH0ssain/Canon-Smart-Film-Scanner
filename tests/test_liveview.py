@@ -177,3 +177,71 @@ def test_liveview_size_is_requested(client: CCAPIClient) -> None:
         frame = live.single_frame()
     assert frame is not None
     assert decode_jpeg(frame).shape == (424, 640, 3)
+
+
+# ---------------------------------------------------------------------------
+# Bodies without the multipart endpoint (e.g. EOS R7)
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def r7_client(client: CCAPIClient, mock_camera_url: str) -> CCAPIClient:
+    """The mock configured like a real EOS R7: no multipart, no camera zoom."""
+    import requests
+
+    requests.post(f"{mock_camera_url}/__mock/body-profile", json={"profile": "r7"}, timeout=5)
+    return client
+
+
+def test_r7_shaped_body_has_no_multipart_endpoint(r7_client: CCAPIClient) -> None:
+    caps = discover(r7_client)
+    assert not caps.has("liveview_multipart")
+    assert caps.has("liveview_scroll")
+
+
+def test_r7_shaped_body_falls_back_to_binary_framing(r7_client: CCAPIClient) -> None:
+    """On these bodies Canon's binary framing is the primary path, not a fallback."""
+    caps = discover(r7_client)
+    assert LiveView(r7_client, caps).stream_capability() == "liveview_scroll"
+
+
+def test_r7_shaped_body_streams_decodable_frames(r7_client: CCAPIClient) -> None:
+    """The end-to-end proof that the binary path actually works."""
+    caps = discover(r7_client)
+    with LiveView(r7_client, caps) as live:
+        frames = []
+        for frame in live.frames():
+            frames.append(frame)
+            if len(frames) >= 3:
+                break
+    assert len(frames) == 3
+    for frame in frames:
+        assert decode_jpeg(frame).shape == (640, 960, 3)
+
+
+def test_r7_shaped_body_hides_camera_zoom(r7_client: CCAPIClient) -> None:
+    """No lvzoom means the UI must not offer a control that does nothing."""
+    caps = discover(r7_client)
+    assert not caps.has("lv_zoom")
+
+
+def test_body_with_no_stream_endpoints_polls_single_frames(client: CCAPIClient) -> None:
+    """The universal fallback: some bodies may offer neither continuous stream."""
+    caps = discover(client)
+    caps.resolved.pop("liveview_multipart", None)
+    caps.resolved.pop("liveview_scroll", None)
+
+    live = LiveView(client, caps)
+    assert live.stream_capability() is None
+
+    live.start()
+    try:
+        frames = []
+        for frame in live.frames():
+            frames.append(frame)
+            if len(frames) >= 2:
+                break
+    finally:
+        live.stop()
+    assert len(frames) == 2
+    assert decode_jpeg(frames[0]).shape == (640, 960, 3)

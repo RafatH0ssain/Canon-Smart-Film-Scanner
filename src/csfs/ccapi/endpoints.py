@@ -39,6 +39,24 @@ Paths genuinely move between API versions, which is why matching beats
 hardcoding. The clearest example is stored files: the ver100 listing is rooted
 at a storage name, later versions use a card name, and ver140 inserts a
 directory level. Discovery follows whatever the camera reports.
+
+CONFIRMED AGAINST REAL HARDWARE
+-------------------------------
+**EOS R7** (firmware current as of 2026-08-03, 102 endpoints, ver100/110/130):
+32 of 34 capabilities resolved with no hint changes needed. Two are genuinely
+absent from the body, and both matter:
+
+  - **No** ``liveview/multipart``. The R7 offers only flip, flipdetail, scroll,
+    scrolldetail and rtp, so Canon's binary ``scroll`` framing is this body's
+    *primary* live-view path rather than a fallback. Do not assume multipart
+    exists; ``LIVEVIEW_STREAM_PREFERENCE`` handles the fallback automatically.
+  - **No** ``lvzoom``. There is no camera-side live-view magnification on this
+    body, so the software loupe is the only option. The UI hides the control
+    via capability detection rather than offering a button that does nothing.
+
+The R7 also exposes ``functions/wificonnection``, which the reference says is
+unsupported on wired-LAN-capable cameras -- a neat confirmation that this body
+is Wi-Fi only, and that CCAPI has no USB control path.
 """
 
 from __future__ import annotations

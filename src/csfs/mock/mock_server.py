@@ -106,6 +106,14 @@ class MockCameraState:
     lv_zoom: str = "1"
 
     auto_power_off: str = "1min"
+
+    # Body profile. Real bodies differ in which live-view transports and
+    # magnification they offer -- an EOS R7 has neither the multipart endpoint
+    # nor camera-side live-view zoom, so the binary "scroll" framing is its
+    # primary path rather than a fallback. Both configurations need testing.
+    has_multipart: bool = True
+    has_lv_zoom: bool = True
+
     lens_mounted: bool = True
     lens_name: str = "RF100mm F2.8 L MACRO IS USM (mock)"
 
@@ -213,8 +221,7 @@ def _endpoints_for(base: str, *, modern: bool) -> list[dict[str, Any]]:
         _endpoint(f"{base}/devicestatus/temperature", get=True),
         _endpoint(f"{base}/shooting/liveview", post=True),
         _endpoint(f"{base}/shooting/liveview/flip", get=True),
-        _endpoint(f"{base}/shooting/liveview/multipart", get=True, delete=True),
-        _endpoint(f"{base}/shooting/liveview/scroll", get=True),
+        _endpoint(f"{base}/shooting/liveview/scroll", get=True, delete=True),
         _endpoint(f"{base}/shooting/control/shutterbutton", post=True),
         _endpoint(f"{base}/shooting/control/shutterbutton/manual", post=True),
         _endpoint(f"{base}/shooting/control/drivefocus", post=True),
@@ -228,11 +235,14 @@ def _endpoints_for(base: str, *, modern: bool) -> list[dict[str, Any]]:
         _endpoint(f"{base}/event/polling", get=True),
         _endpoint(f"{base}/contents", get=True),
     ]
+    if state.has_multipart:
+        entries.append(
+            _endpoint(f"{base}/shooting/liveview/multipart", get=True, delete=True)
+        )
     if modern:
-        entries += [
-            _endpoint(f"{base}/shooting/settings/shuttermode", get=True, put=True),
-            _endpoint(f"{base}/shooting/settings/lvzoom", get=True, put=True),
-        ]
+        entries.append(_endpoint(f"{base}/shooting/settings/shuttermode", get=True, put=True))
+        if state.has_lv_zoom:
+            entries.append(_endpoint(f"{base}/shooting/settings/lvzoom", get=True, put=True))
     return entries
 
 
@@ -640,6 +650,22 @@ def set_film_type(payload: dict[str, Any]) -> dict[str, Any]:
         raise HTTPException(status_code=400, detail="mode must be 'color' or 'bw'")
     state.color_film = mode == "color"
     return {"message": "ok", "mode": mode}
+
+
+@app.post("/__mock/body-profile")
+def set_body_profile(payload: dict[str, Any]) -> dict[str, Any]:
+    """Switch which capabilities the mock body advertises. Test helper only.
+
+    ``"r7"`` reproduces a real EOS R7: no multipart live-view endpoint and no
+    camera-side live-view zoom, which makes Canon's binary framing the primary
+    stream rather than a fallback. ``"modern"`` advertises everything.
+    """
+    profile = str(payload.get("profile", "modern")).lower()
+    if profile not in {"modern", "r7"}:
+        raise HTTPException(status_code=400, detail="profile must be 'modern' or 'r7'")
+    state.has_multipart = profile == "modern"
+    state.has_lv_zoom = profile == "modern"
+    return {"message": "ok", "profile": profile}
 
 
 @app.post("/__mock/lens")

@@ -1,15 +1,11 @@
 """The magnified focus loupe.
 
-Judging whether film *grain* is sharp is impossible on a full-frame preview
-scaled down to fit a browser window, so the loupe crops a small region and
-scales it up.
+Judging whether film grain is sharp is impossible on a preview scaled down to
+fit a browser window, so the loupe crops a region and scales it up.
 
-An important caveat this module cannot fix on its own: magnifying a live-view
-frame on the PC only enlarges pixels the camera already discarded when it
-downscaled the stream. It genuinely helps -- a 1:1 view of the stream beats a
-shrunk-to-fit one -- but where the body supports camera-side live-view zoom, the
-app should drive that instead, because it returns real sensor detail. The two
-compose: camera zoom first, then this for the final magnification step.
+This only enlarges pixels the camera already discarded when it downscaled the
+live-view stream. Where a body supports camera-side live-view zoom, drive that
+instead for real sensor detail; the two compose.
 """
 
 from __future__ import annotations
@@ -29,19 +25,15 @@ def crop_zoom(
 
     Args:
         frame: Source image, ``(H, W, 3)``.
-        center_x: Horizontal centre of the region, normalised 0.0-1.0.
-        center_y: Vertical centre of the region, normalised 0.0-1.0.
-        zoom: Magnification. 1.0 returns the whole frame; 4.0 crops a quarter of
-            the width and height.
-        output_size: ``(width, height)`` of the result. Defaults to the input's
-            size, so the loupe fills the same space the full view did.
+        center_x: Horizontal centre, normalised 0.0-1.0.
+        center_y: Vertical centre, normalised 0.0-1.0.
+        zoom: Magnification. 1.0 returns the whole frame.
+        output_size: ``(width, height)`` of the result; defaults to the input's.
 
     Returns:
         A new array. The crop is clamped to stay inside the frame, so a centre
-        near an edge slides the region inward rather than producing a smaller
-        or padded result -- the alternative makes the loupe appear to break
-        exactly when you drag it to a corner to check the corners, which is one
-        of the things it is most useful for.
+        near an edge slides inward rather than producing a smaller result --
+        checking corner sharpness is one of the loupe's main uses.
 
     Raises:
         ValueError: If ``zoom`` is not positive.
@@ -55,12 +47,11 @@ def crop_zoom(
     if zoom <= 1.0:
         return _resize(frame, target_w, target_h)
 
-    crop_w = max(int(round(width / zoom)), 1)
-    crop_h = max(int(round(height / zoom)), 1)
+    crop_w = max(round(width / zoom), 1)
+    crop_h = max(round(height / zoom), 1)
 
-    # Clamp the centre so the crop window stays fully inside the frame.
-    left = int(round(np.clip(center_x, 0.0, 1.0) * width - crop_w / 2))
-    top = int(round(np.clip(center_y, 0.0, 1.0) * height - crop_h / 2))
+    left = round(np.clip(center_x, 0.0, 1.0) * width - crop_w / 2)
+    top = round(np.clip(center_y, 0.0, 1.0) * height - crop_h / 2)
     left = max(0, min(left, width - crop_w))
     top = max(0, min(top, height - crop_h))
 
@@ -71,9 +62,8 @@ def crop_zoom(
 def _resize(frame: np.ndarray, width: int, height: int) -> np.ndarray:
     """Resize to exactly ``width`` x ``height``.
 
-    Uses nearest-neighbour when enlarging. Smooth interpolation would invent
-    detail that is not in the data and make an out-of-focus frame look
-    acceptably sharp -- the precise mistake the loupe exists to prevent.
+    Nearest-neighbour when enlarging: smooth interpolation would invent detail
+    and make an out-of-focus frame look acceptably sharp.
     """
     if frame.shape[1] == width and frame.shape[0] == height:
         return frame.copy()

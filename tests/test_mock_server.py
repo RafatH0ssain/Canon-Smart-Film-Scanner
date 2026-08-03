@@ -1,13 +1,9 @@
 """Tests for the mock camera itself.
 
-The mock is test infrastructure, so it needs its own tests: if it silently
-stopped rejecting live-view requests before the session is started, every test
-built on it would keep passing while diverging from a real body.
-
-The request and response shapes asserted here were calibrated against Canon's
-CCAPI reference. Where this file encodes an expectation about CCAPI's own
-behaviour -- live view being started by choosing a size, shutter mode values,
-the 503 for a stopped stream -- that expectation is the thing under test.
+The mock is test infrastructure, so it needs its own tests: if it stopped
+reproducing a real body's behaviour, everything built on it would keep passing
+while diverging. The request and response shapes asserted here are the
+expectations about CCAPI that the rest of the code relies on.
 """
 
 from __future__ import annotations
@@ -95,12 +91,8 @@ def test_multipart_stream_delivers_multiple_frames(client: CCAPIClient) -> None:
 
 
 def test_scroll_stream_sends_bare_jpegs(client: CCAPIClient) -> None:
-    """'scroll' carries concatenated JPEGs, with no framing of Canon's own.
-
-    The binary framing belongs to 'scrolldetail'. Confusing the two is not a
-    cosmetic mistake: a parser expecting a length header finds none and yields
-    no frames at all.
-    """
+    """'scroll' carries concatenated JPEGs; the framing belongs to
+    'scrolldetail'. A parser expecting a length header yields nothing."""
     caps = discover(client)
     _start_liveview(client, caps)
     with client.stream(caps.path("liveview_scroll")) as response:
@@ -199,8 +191,7 @@ def test_focus_drive_accepts_the_documented_values(client: CCAPIClient) -> None:
 
 
 def test_focus_drive_rejects_an_invented_payload(client: CCAPIClient) -> None:
-    """Guards against reintroducing the {direction, steps} shape this project
-    once invented before checking the reference."""
+    """Guards against reintroducing a {direction, steps} shape."""
     caps = discover(client)
     response = client.post(
         caps.path("focus_drive"), json={"direction": "near", "steps": 3}, expect_status=False
@@ -254,11 +245,7 @@ def test_defocusing_reduces_measured_sharpness(client: CCAPIClient) -> None:
 
 
 def test_camera_zoom_reveals_detail_software_zoom_cannot(client: CCAPIClient) -> None:
-    """Camera-side zoom returns real sensor detail, not enlarged pixels.
-
-    This is why the focus loupe should drive lvzoom rather than upscaling the
-    live-view frame on the PC.
-    """
+    """Camera-side zoom returns real sensor detail, not enlarged pixels."""
     caps = discover(client)
     _start_liveview(client, caps)
     for _ in range(2):

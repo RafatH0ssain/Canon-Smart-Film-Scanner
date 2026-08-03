@@ -12,4 +12,4 @@ from csfs.processing.codec import decode_jpeg, encode_jpeg
 from csfs.processing.invert import invert_linear
 from csfs.processing.loupe import crop_zoom
 
-__all__ = ["decode_jpeg", "encode_jpeg", "invert_linear", "crop_zoom"]
+__all__ = ["crop_zoom", "decode_jpeg", "encode_jpeg", "invert_linear"]

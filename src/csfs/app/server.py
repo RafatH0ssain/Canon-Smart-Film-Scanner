@@ -15,10 +15,11 @@ from __future__ import annotations
 import argparse
 import logging
 from pathlib import Path
-from typing import Any, Iterator, Literal
+from typing import Any, Literal
+from collections.abc import Iterator
 
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -101,8 +102,8 @@ def index() -> FileResponse:
 def status() -> dict[str, Any]:
     """Everything the UI needs to render itself.
 
-    Capabilities are reported so the UI can hide controls the body does not
-    have, rather than offering buttons that do nothing.
+    Capabilities are included so the UI can hide controls the body lacks rather
+    than offering buttons that do nothing.
     """
     caps = session.capabilities
     payload: dict[str, Any] = {
@@ -147,8 +148,7 @@ def connect() -> dict[str, Any]:
     except CaptureInProgressError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except CCAPIError as exc:
-        # These messages name the real-world cause; pass them straight through
-        # so the browser shows something actionable.
+        # These messages name the real-world cause; pass them through verbatim.
         raise HTTPException(status_code=502, detail=str(exc)) from exc
     return status()
 
@@ -167,9 +167,8 @@ def disconnect() -> dict[str, Any]:
 def _render(frame_bytes: bytes) -> bytes | None:
     """Apply the current preview settings to one raw live-view frame.
 
-    Returns None for an undecodable frame. Live-view streams occasionally
-    deliver a partial image, and dropping one is invisible at 15fps whereas
-    tearing down the session over it is not.
+    Returns None for an undecodable frame; live-view streams occasionally
+    deliver a partial image, and dropping one is invisible at 15fps.
     """
     try:
         image = decode_jpeg(frame_bytes)
@@ -179,10 +178,7 @@ def _render(frame_bytes: bytes) -> bytes | None:
     if session.preview.invert:
         image = invert_linear(image)
 
-    # Peaking must run at native resolution, BEFORE the loupe. The loupe
-    # enlarges with nearest-neighbour, so peaking a magnified frame would mark
-    # the hard edges of enlarged pixel blocks and light up the whole view
-    # regardless of focus.
+    # Peaking runs at native resolution, before the loupe: see peaking.py.
     if session.preview.peaking:
         image = apply_peaking(image, sensitivity=session.preview.peaking_sensitivity)
 
@@ -233,8 +229,8 @@ def stream() -> StreamingResponse:
 
 
 @app.get("/frame.jpg")
-def single_frame() -> Any:
-    """One processed frame. Useful for debugging without opening a stream."""
+def single_frame() -> Response:
+    """One processed frame, without opening a stream."""
     if session.pump is None:
         raise HTTPException(status_code=409, detail="Not connected.")
     result = session.pump.latest(after=0, timeout=5.0)
@@ -243,8 +239,6 @@ def single_frame() -> Any:
     rendered = _render(result[0])
     if rendered is None:
         raise HTTPException(status_code=503, detail="Live-view frame could not be decoded.")
-    from fastapi.responses import Response
-
     return Response(content=rendered, media_type="image/jpeg")
 
 
@@ -277,9 +271,8 @@ def set_camera_zoom(request: ZoomRequest) -> dict[str, Any]:
 def drive_focus(request: FocusRequest) -> dict[str, Any]:
     """Move focus one increment.
 
-    A refusal is reported as 409 with the reason, because the overwhelmingly
-    common cause -- the lens set to manual focus -- is something the user fixes
-    on the rig, not a server fault.
+    A refusal is a 409 with the reason: the usual cause is the lens set to
+    manual focus, which the user fixes on the rig.
     """
     if not session.connected or session.focus is None:
         raise HTTPException(status_code=409, detail="Not connected.")
@@ -304,9 +297,8 @@ def recheck_focus() -> dict[str, Any]:
 def measure_sharpness() -> dict[str, Any]:
     """Sharpness of the region the loupe is on, plus per-corner values.
 
-    Only meaningful relative to itself: turn focus and watch it rise. The corner
-    figures show whether the film plane is parallel to the sensor -- if one
-    corner is consistently lower, the stand needs levelling.
+    Relative only: turn focus and watch it rise. A corner consistently lower
+    than the others means the stand is not parallel to the film.
     """
     if session.pump is None:
         raise HTTPException(status_code=409, detail="Not connected.")
@@ -318,8 +310,7 @@ def measure_sharpness() -> dict[str, Any]:
     except DecodeError:
         raise HTTPException(status_code=503, detail="Frame could not be decoded.") from None
 
-    # Measured on the raw frame: inversion does not change edge contrast, and
-    # the loupe's nearest-neighbour enlargement would inflate the value.
+    # Measured on the raw frame: the loupe's enlargement would inflate it.
     value = sharpness_of_region(
         image,
         center_x=session.preview.loupe_x,
@@ -350,9 +341,7 @@ def reset_sharpness() -> dict[str, Any]:
 def set_setting(request: SettingRequest) -> dict[str, Any]:
     """Change one camera setting.
 
-    The value must be one the camera reports as currently selectable; the same
-    setting accepts different values on different bodies and in different
-    exposure modes.
+    The value must be one the camera currently reports as selectable.
     """
     if not session.connected:
         raise HTTPException(status_code=409, detail="Not connected.")
@@ -375,8 +364,7 @@ def capture() -> dict[str, Any]:
     try:
         path = session.capture()
     except CaptureInProgressError as exc:
-        # 409, not 500: the request is fine, the timing is not. Queueing instead
-        # would park a thread behind the running capture indefinitely.
+        # 409, not 500: the request is fine, the timing is not.
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except CCAPIError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc

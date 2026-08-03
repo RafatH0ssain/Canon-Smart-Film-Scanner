@@ -1,10 +1,8 @@
 """Reading and writing camera settings.
 
-Settings in CCAPI are reported as ``{"value": ..., "ability": [...]}``, where
-``ability`` is what this particular body in its current mode will accept. Always
-choose from ``ability`` rather than assuming a value is settable: the same
-setting accepts different values on different bodies, and in different exposure
-modes on the same body.
+Settings are reported as ``{"value": ..., "ability": [...]}``, where ability is
+what this body will accept in its current mode. Always choose from ability
+rather than assuming a value is settable.
 """
 
 from __future__ import annotations
@@ -19,6 +17,19 @@ from csfs.ccapi.errors import CCAPIError, UnsupportedEndpointError
 
 logger = logging.getLogger(__name__)
 
+# CCAPI's own name for each capability in the combined settings response.
+_BULK_KEYS: dict[str, str] = {
+    "iso": "iso",
+    "aperture": "av",
+    "shutter_speed": "tv",
+    "white_balance": "wb",
+    "shutter_mode": "shuttermode",
+    "af_operation": "afoperation",
+    "drive_mode": "drive",
+    "exposure": "exposure",
+    "af_method": "afmethod",
+}
+
 
 @dataclass(frozen=True)
 class Setting:
@@ -31,8 +42,7 @@ class Setting:
     def can_set(self, value: str) -> bool:
         """Whether ``value`` is currently selectable.
 
-        An empty ability list means the camera did not say, so we do not
-        pre-emptively refuse.
+        An empty ability list means the camera did not say, so we do not refuse.
         """
         return not self.ability or value in self.ability
 
@@ -40,8 +50,8 @@ class Setting:
 def read_setting(client: CCAPIClient, caps: Capabilities, capability: str) -> Setting | None:
     """Read one setting, or None if this camera does not expose it.
 
-    Returns None rather than raising, because "this body has no such control"
-    is a normal situation the UI should handle by hiding the control.
+    None rather than an exception: "this body has no such control" is normal,
+    and the UI handles it by hiding the control.
     """
     try:
         path = caps.path(capability)
@@ -68,9 +78,8 @@ def write_setting(
 ) -> bool:
     """Set one setting. Returns True on success.
 
-    Returns False instead of raising when the camera lacks the setting or
-    rejects the value, since neither is fatal to a scanning session -- the
-    caller decides whether to warn or carry on.
+    False rather than an exception when the camera lacks the setting or rejects
+    the value; neither is fatal to a scanning session.
     """
     try:
         path = caps.path(capability)
@@ -86,15 +95,7 @@ def write_setting(
 
 
 def choose_supported(preference: tuple[str, ...], setting: Setting | None) -> str | None:
-    """Pick the first preferred value this camera actually offers.
-
-    Args:
-        preference: Candidate values, best first.
-        setting: The setting as read from the camera, or None.
-
-    Returns:
-        The best available value, or None if none of them are offered.
-    """
+    """Pick the first preferred value this camera actually offers."""
     if setting is None:
         return None
     if not setting.ability:
@@ -107,38 +108,17 @@ def choose_supported(preference: tuple[str, ...], setting: Setting | None) -> st
     return None
 
 
-# CCAPI's own name for each capability, as it appears in the combined
-# shooting-settings response.
-_BULK_KEYS: dict[str, str] = {
-    "iso": "iso",
-    "aperture": "av",
-    "shutter_speed": "tv",
-    "white_balance": "wb",
-    "shutter_mode": "shuttermode",
-    "af_operation": "afoperation",
-    "drive_mode": "drive",
-    "exposure": "exposure",
-    "af_method": "afmethod",
-}
-
-
 def read_all(
     client: CCAPIClient, caps: Capabilities, capabilities: tuple[str, ...]
 ) -> dict[str, Setting]:
     """Read several settings, skipping any this camera does not expose.
 
-    Uses the combined shooting-settings endpoint when the camera offers it,
-    which collapses one request per setting into a single request. That matters
-    more than it looks: this runs on every UI poll, and firing seven requests at
-    a camera that is simultaneously streaming live view is enough to make it
-    stop responding.
-
-    Falls back to reading settings individually if the combined endpoint is
-    missing or does not contain what we need.
+    Uses the combined shooting-settings endpoint where available, which turns
+    one request per setting into one request total. That matters because this
+    runs on every UI poll, against a camera already busy streaming live view.
     """
     out = _read_all_bulk(client, caps, capabilities)
 
-    # Fill in anything the combined response did not cover.
     for capability in capabilities:
         if capability in out:
             continue
@@ -167,8 +147,7 @@ def _read_all_bulk(
         key = _BULK_KEYS.get(capability)
         if key is None:
             continue
-        entry = payload.get(key)
-        setting = _to_setting(capability, entry)
+        setting = _to_setting(capability, payload.get(key))
         if setting is not None:
             out[capability] = setting
     return out
@@ -177,9 +156,8 @@ def _read_all_bulk(
 def disable_auto_power_off(client: CCAPIClient, caps: Capabilities) -> bool:
     """Stop the camera sleeping mid-roll.
 
-    Worth doing at the start of a session: a camera that has gone to sleep is
-    indistinguishable from a wiring fault at the far end of a USB cable, and
-    scanning a roll involves long idle stretches between frames.
+    A sleeping camera is indistinguishable from a network fault, and scanning
+    involves long idle stretches between frames.
     """
     setting = read_setting(client, caps, "auto_power_off")
     value = choose_supported(("disable",), setting)

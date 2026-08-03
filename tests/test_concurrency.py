@@ -1,11 +1,9 @@
 """Tests for concurrent access to a camera that serves one client at a time.
 
-These exist because of a real failure: a capture on a real EOS R7 hung for
-minutes, and a stack dump showed three capture requests -- two parked on a lock
-that never released -- plus a connect and a status poll all blocked in socket
-reads, while the live-view stream held the same requests.Session.
-
-Every assertion here maps to one of those causes.
+Covers the causes of a capture hang seen on hardware: a shared
+requests.Session between the live-view pump and control calls, unserialised
+concurrent requests, captures queueing on a lock, and a settings read costing
+one request per setting on every poll.
 """
 
 from __future__ import annotations
@@ -22,7 +20,7 @@ from csfs.config import Config
 
 
 @pytest.fixture
-def session(mock_camera_url: str, reset_camera: None, tmp_path) -> ScanSession:  # noqa: ANN001
+def session(mock_camera_url: str, reset_camera: None, tmp_path) -> ScanSession:
     config = Config()
     config.camera.base_url = mock_camera_url
     config.capture.output_dir = str(tmp_path)
@@ -38,15 +36,13 @@ def session(mock_camera_url: str, reset_camera: None, tmp_path) -> ScanSession: 
 
 
 def test_streaming_uses_a_separate_http_session(mock_camera_url: str) -> None:
-    """requests.Session is not thread-safe, and the pump holds one open for the
-    life of the session while control calls run on other threads."""
+    """requests.Session is not thread-safe and the pump holds one open."""
     with CCAPIClient(mock_camera_url) as client:
         assert client._session is not client._stream_session
 
 
 def test_control_calls_work_while_a_stream_is_open(client: CCAPIClient) -> None:
-    """The regression test for the hang: a live-view stream must not block
-    ordinary requests. The streaming lock is released once headers arrive."""
+    """A live-view stream must not block ordinary requests."""
     caps = discover(client)
     with LiveView(client, caps) as live:
         stream = live.frames()
@@ -70,7 +66,7 @@ def test_concurrent_control_calls_are_serialised(client: CCAPIClient) -> None:
         try:
             for _ in range(5):
                 results.append(client.get_json(path)["productname"])
-        except BaseException as exc:  # noqa: BLE001
+        except BaseException as exc:
             errors.append(exc)
 
     threads = [threading.Thread(target=worker) for _ in range(6)]
@@ -90,7 +86,7 @@ def test_concurrent_control_calls_are_serialised(client: CCAPIClient) -> None:
 
 
 def test_second_capture_is_refused_not_queued(session: ScanSession) -> None:
-    """Queueing turned every extra click into a thread parked indefinitely."""
+    """Queueing parks a thread per extra click or browser tab."""
     session.connect()
 
     # Hold the capture lock as a running capture would.
@@ -119,7 +115,7 @@ def test_capture_lock_is_released_after_a_failure(session: ScanSession) -> None:
 
 
 def test_capture_succeeds_while_live_view_streams(session: ScanSession) -> None:
-    """The end-to-end shape of the failure: capture with the pump running."""
+    """Capture with the pump running, the shape the hang took."""
     session.connect()
     assert session.pump is not None and session.pump.running
 
@@ -131,7 +127,7 @@ def test_capture_succeeds_while_live_view_streams(session: ScanSession) -> None:
 
 
 def test_second_connect_is_refused_while_one_is_running(session: ScanSession) -> None:
-    """An impatient second click would otherwise tear down the first attempt."""
+    """A second click would otherwise tear down the first attempt."""
     assert session._connect_lock.acquire(blocking=False)
     try:
         with pytest.raises(CaptureInProgressError):
@@ -146,19 +142,17 @@ def test_second_connect_is_refused_while_one_is_running(session: ScanSession) ->
 
 
 def test_reading_all_settings_costs_one_request(session: ScanSession) -> None:
-    """This runs on every UI poll. Seven requests per poll, against a camera
-    already busy streaming live view, is what tipped the R7 over."""
+    """Runs on every UI poll, against a camera already busy streaming."""
     session.connect()
     assert session.client is not None
 
     calls: list[str] = []
     original = session.client.request
-    # Count only this thread's requests: the live-view pump shares the client
-    # and reconnects its stream on its own thread, which is not what is under
-    # test here.
+    # Only this thread's requests: the pump shares the client and reconnects its
+    # stream on its own thread.
     this_thread = threading.get_ident()
 
-    def counting(method: str, path: str, **kwargs: object):  # noqa: ANN202
+    def counting(method: str, path: str, **kwargs: object):
         if threading.get_ident() == this_thread:
             calls.append(path)
         return original(method, path, **kwargs)

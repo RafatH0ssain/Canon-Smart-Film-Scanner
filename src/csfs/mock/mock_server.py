@@ -1,36 +1,18 @@
-"""A mock CCAPI camera.
-
-Run it::
+"""A mock CCAPI camera, so the project can be developed with no hardware.
 
     python -m csfs.mock.mock_server
 
-Then point ``camera.base_url`` at ``http://127.0.0.1:8080`` (which is already
-the default) and the rest of the application cannot tell the difference for the
-features it needs.
+Point ``camera.base_url`` at ``http://127.0.0.1:8080`` (the default) and the
+rest of the app cannot tell the difference for the features it needs.
 
-WHAT THIS IS AND IS NOT
------------------------
-The request and response shapes here were calibrated against Canon's CCAPI
-Reference v1.4.0 on 2026-08-02, but this file contains none of Canon's text --
-that document is licensed per-developer and cannot live in this repository.
+Shapes here were calibrated against Canon's reference, but this file contains
+none of Canon's text and no real body has confirmed it. That is safe because the
+client never assumes a path -- it reads the inventory this server publishes,
+exactly as it reads a real camera's.
 
-The mock is not authoritative and no real body has confirmed it. That is safe,
-because the client never assumes a path: it reads the endpoint inventory this
-server publishes, exactly as it reads the inventory a real camera publishes (see
-``csfs.ccapi.discovery``). The mock therefore exercises the real discovery path
-rather than papering over it.
-
-It models the parts of a camera that matter for scanning, including several
-things that only bite in practice:
-
-  - **Two API versions**, with the newer one exposing capabilities the older
-    lacks, so capability detection is genuinely exercised.
-  - **Live view is started by choosing an output size**, not by a bare "start",
-    and is stopped by setting that size back to off.
-  - **Auto power-off**, because a sleeping camera looks exactly like a wiring
-    fault, and scanning a roll involves long idle stretches.
-  - **Camera-side live-view zoom**, which returns real sensor detail rather than
-    enlarged pixels.
+It reproduces several things that only bite in practice: two API versions with
+different capabilities, live view started by choosing a size, a second card slot
+with a movie on it, and a "already started" stream state.
 """
 
 from __future__ import annotations
@@ -41,7 +23,8 @@ import math
 import struct
 import time
 from dataclasses import dataclass, field
-from typing import Any, AsyncIterator
+from typing import Any
+from collections.abc import AsyncIterator
 
 import cv2
 import numpy as np
@@ -96,10 +79,8 @@ class MockCameraState:
     # and the sharpness metric responds -- which is the point of v0.2.
     focus_position: int = 0
 
-    # One of elec_1st_curtain / mechanical / electronic. Defaults to the
-    # mechanical-tinged option deliberately, so code that forgets to select
-    # "electronic" produces a visibly wrong default rather than working by
-    # accident.
+    # Deliberately not "electronic", so code that forgets to select it fails
+    # visibly rather than passing by accident.
     shutter_mode: str = "elec_1st_curtain"
 
     # Camera-side live-view magnification: "1", "5" or "10".
@@ -107,28 +88,22 @@ class MockCameraState:
 
     auto_power_off: str = "1min"
 
-    # Body profile. Real bodies differ in which live-view transports and
-    # magnification they offer -- an EOS R7 has neither the multipart endpoint
-    # nor camera-side live-view zoom, so the binary "scroll" framing is its
-    # primary path rather than a fallback. Both configurations need testing.
+    # Bodies differ in which live-view transports and magnification they offer.
+    # An R7 has neither multipart nor lvzoom; both shapes need testing.
     has_multipart: bool = True
     has_lv_zoom: bool = True
 
-    # A chunked stream the camera believes is still open. A real body answers
-    # 503 "Already started" until it is closed, which is how a crashed client's
-    # leftover session shows up.
+    # A stream the camera believes is still open, as a crashed client leaves it.
     scroll_streaming: bool = False
 
     lens_mounted: bool = True
     lens_name: str = "RF100mm F2.8 L MACRO IS USM (mock)"
 
-    # Stands in for the lens AF/MF switch. CCAPI cannot drive focus when focus
-    # is manual, which is the whole reason this project does its own peaking.
+    # Stands in for the lens AF/MF switch: focus drive does not work in manual.
     manual_focus: bool = False
 
-    # Defaults chosen to be wrong for scanning on purpose: a real body is very
-    # likely to arrive on continuous drive and servo AF, and code that assumes
-    # sane defaults would pass here and fire bursts at the copy stand.
+    # Wrong for scanning on purpose. A real body is likely to arrive like this,
+    # and code assuming sane defaults would fire bursts at the copy stand.
     drive_mode: str = "lowspeed"
     af_operation: str = "servo"
 
@@ -148,9 +123,8 @@ class MockCameraState:
     def focus_error(self) -> float:
         """Blur radius implied by the current focus position.
 
-        Camera-side zoom divides the visible blur, because magnifying real
-        sensor detail is what makes misfocus obvious -- the whole reason the
-        loupe should prefer camera zoom over enlarging pixels on the PC.
+        Camera-side zoom divides the visible blur, since magnifying real sensor
+        detail is what makes misfocus obvious.
         """
         return abs(self.focus_position) / 4.0 / float(self.lv_zoom)
 
@@ -190,9 +164,8 @@ def _version_prefix(request: Request) -> str:
 def _liveview_frame() -> np.ndarray:
     """Render the current live-view frame.
 
-    Live view on a real body is a reduced-resolution stream, so the mock matches
-    that: the loupe in the UI must magnify a genuinely limited source, otherwise
-    focus confirmation would look better in development than it does in reality.
+    Reduced resolution like a real body, so the loupe magnifies a genuinely
+    limited source rather than looking better than reality.
     """
     width, height = _LIVEVIEW_PIXELS.get(state.liveview_size, _LIVEVIEW_PIXELS["medium"])
     return make_negative(
@@ -206,11 +179,8 @@ def _liveview_frame() -> np.ndarray:
 
 
 def _require_liveview() -> None:
-    """Reject a frame request when live view has not been started.
-
-    A real body answers 503 here, and code that forgets to start the session
-    should fail in development rather than at the copy stand.
-    """
+    """Reject a frame request when live view has not been started, as a real
+    body does."""
     if not state.liveview_active:
         raise HTTPException(status_code=503, detail={"message": "Live view not started"})
 
@@ -267,11 +237,7 @@ def _endpoints_for(base: str, *, modern: bool) -> list[dict[str, Any]]:
 @app.get(API_ROOT + "/")
 @app.get(API_ROOT)
 def api_root() -> dict[str, list[dict[str, Any]]]:
-    """List every supported API version and its full endpoint inventory.
-
-    This single response is what makes CCAPI self-describing: the client reads
-    it and never has to assume a path.
-    """
+    """Every supported API version and its full endpoint inventory."""
     return {
         VER_OLD: _endpoints_for(BASE_OLD, modern=False),
         VER: _endpoints_for(BASE, modern=True),
@@ -313,12 +279,8 @@ def battery() -> dict[str, str]:
 
 @router.get("/devicestatus/lens")
 def lens() -> dict[str, Any]:
-    """Report the mounted lens.
-
-    Note this says nothing about whether the lens can autofocus -- CCAPI does
-    not report that. Manual-lens detection has to come from whether the focus
-    endpoint exists and actually responds.
-    """
+    """Report the mounted lens. Says nothing about AF capability, as CCAPI
+    does not report that."""
     return {"mount": state.lens_mounted, "name": state.lens_name if state.lens_mounted else ""}
 
 
@@ -401,12 +363,9 @@ def liveview_multipart_stop() -> dict[str, Any]:
 
 
 async def _scroll_frames() -> AsyncIterator[bytes]:
-    """Yield bare, concatenated JPEGs.
+    """Yield bare, concatenated JPEGs, which is what ``scroll`` delivers.
 
-    This is what ``scroll`` actually delivers: JPEG data split across HTTP
-    chunks with no framing of Canon's own. The binary framing with a length
-    header belongs to ``scrolldetail``, which is a different endpoint -- see
-    ``_scrolldetail_frames``.
+    The framing with a length header belongs to ``scrolldetail``.
     """
     interval = 1.0 / LIVEVIEW_FPS
     while state.liveview_active:
@@ -419,9 +378,8 @@ async def _scroll_frames() -> AsyncIterator[bytes]:
 def liveview_scroll() -> StreamingResponse:
     """Continuous live view as chunked JPEG data.
 
-    Answers 503 "Already started" if a stream is already running, exactly as a
-    real body does -- that message is how a leftover session from a crashed
-    process announces itself, and code must recover from it.
+    Answers 503 "Already started" if a stream is already running, which is how a
+    leftover session from a crashed process announces itself.
     """
     _require_liveview()
     if state.scroll_streaming:
@@ -470,17 +428,15 @@ def liveview_scrolldetail() -> StreamingResponse:
 def shutter_button(payload: dict[str, Any] | None = None) -> JSONResponse:
     """Fire the shutter and write a file to the fake card. ``{"af": bool}``.
 
-    The captured frame is rendered at a higher resolution than live view and
-    with finer grain, mirroring the real gap between the preview stream and the
-    file you actually scan from.
+    Rendered larger and with finer grain than live view, mirroring the real gap
+    between the preview stream and the file you scan from.
     """
     payload = payload or {}
     af = payload.get("af", False)
     if not isinstance(af, bool):
         raise HTTPException(status_code=400, detail={"message": "Invalid parameter"})
     if af:
-        # Autofocus on film grain is unreliable and can hunt. Nudging focus here
-        # makes that mistake visible in the preview rather than silent.
+        # Nudge focus so requesting AF, which hunts on grain, is visible.
         state.focus_position += 1
 
     frame = make_negative(
@@ -526,12 +482,8 @@ _FOCUS_STEPS = {
 def drive_focus(payload: dict[str, Any] | None = None) -> dict[str, Any]:
     """Drive focus one increment. ``{"value": "near1".."far3"}``.
 
-    Refuses when focus is manual, as a real body does -- that is the constraint
-    that makes the camera's own peaking and remote focus drive mutually
-    exclusive, and it needs to be reproducible without unplugging a lens.
-
-    A real lens has finite travel, so the position is clamped: code that assumes
-    it can always drive further has to handle the limit.
+    Refuses when focus is manual, as a real body does. Position is clamped: a
+    real lens has finite travel.
     """
     payload = payload or {}
     if not state.lens_mounted:
@@ -649,11 +601,7 @@ def put_auto_power_off(payload: dict[str, Any]) -> dict[str, Any]:
 
 @router.get("/event/polling")
 def event_polling() -> dict[str, Any]:
-    """Report state changes since the last poll.
-
-    Real bodies use this to announce that a capture has been written, which is
-    more reliable than sleeping for a guessed interval after the shutter.
-    """
+    """Report state changes since the last poll, including new captures."""
     latest = state.files[-1].name if state.files else None
     return {"addedcontents": [latest] if latest else []}
 
@@ -663,13 +611,10 @@ def event_polling() -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 
-# A real body reports two card slots and names its folder after the model.
 _FOLDER = "100EOSR7"
 
-# A movie sitting on the card alongside the stills. Present because a walker
-# that classifies entries by "is this a known image type?" mistakes this for a
-# directory, requests it as a listing, and the camera answers with the whole
-# video -- which wedged a real capture for minutes.
+# A movie alongside the stills. A walker that classifies entries by "is this a
+# known image type?" mistakes this for a directory and downloads the video.
 _MOVIE_NAME = "MVI_0421.MP4"
 _MOVIE_BYTES = b"\x00\x00\x00\x20ftypmp42" + b"\xab" * (3 * 1024 * 1024)
 
@@ -717,9 +662,7 @@ def contents_delete(card: str, name: str) -> dict[str, Any]:
     raise HTTPException(status_code=404, detail={"message": f"Not found: '{name}'"})
 
 
-# Mount the shared routes under both versions, and the newer-only routes under
-# the newer version alone. Order matters: the modern router must be included
-# first so its more specific settings handler wins for that prefix.
+# The modern router must be included first so its settings handler wins.
 app.include_router(modern_router, prefix=BASE)
 app.include_router(router, prefix=BASE)
 app.include_router(router, prefix=BASE_OLD)
@@ -742,11 +685,10 @@ def set_film_type(payload: dict[str, Any]) -> dict[str, Any]:
 
 @app.post("/__mock/body-profile")
 def set_body_profile(payload: dict[str, Any]) -> dict[str, Any]:
-    """Switch which capabilities the mock body advertises. Test helper only.
+    """Switch which capabilities the mock advertises. Test helper only.
 
-    ``"r7"`` reproduces a real EOS R7: no multipart live-view endpoint and no
-    camera-side live-view zoom, which makes Canon's binary framing the primary
-    stream rather than a fallback. ``"modern"`` advertises everything.
+    ``"r7"`` drops multipart live view and lvzoom, as a real R7 does;
+    ``"modern"`` advertises everything.
     """
     profile = str(payload.get("profile", "modern")).lower()
     if profile not in {"modern", "r7"}:
@@ -773,7 +715,7 @@ def set_lens(payload: dict[str, Any]) -> dict[str, Any]:
 @app.get("/__mock/needs-auth")
 @app.get("/__mock/needs-auth/{rest:path}")
 def needs_auth(rest: str = "") -> Response:
-    """Always answers 401, to exercise the digest-auth error path. Test helper only."""
+    """Always answers 401, to exercise the auth error path. Test helper only."""
     return Response(
         status_code=401,
         content='{"message":"Unauthorized"}',

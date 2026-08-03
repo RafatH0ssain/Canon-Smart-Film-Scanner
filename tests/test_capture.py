@@ -1,8 +1,4 @@
-"""Tests for the capture path: shutter selection, settle delay, download.
-
-This is the part of the project that exists to produce sharp scans, so the
-behaviours asserted here are the ones that actually cause blur when wrong.
-"""
+"""Tests for the capture path: shutter selection, settle delay, download."""
 
 from __future__ import annotations
 
@@ -64,7 +60,7 @@ def test_capture_waits_the_settle_delay_before_firing(client: CCAPIClient) -> No
 
     original = shutter_api.release
 
-    def spy(c, caps_, af=False):  # noqa: ANN001
+    def spy(c, caps_, af=False):
         fired_at.append(time.monotonic())
         original(c, caps_, af=af)
 
@@ -80,12 +76,8 @@ def test_capture_waits_the_settle_delay_before_firing(client: CCAPIClient) -> No
 
 
 def test_capture_with_zero_delay_adds_no_wait(client: CCAPIClient) -> None:
-    """A zero delay must cost nothing beyond the release itself.
-
-    Compared against a bare release rather than an absolute threshold, because
-    the mock spends real time rendering a full-resolution capture and that time
-    is not what this test is about.
-    """
+    """Compared against a bare release, since the mock spends real time
+    rendering a full-resolution capture."""
     caps = discover(client)
 
     started = time.monotonic()
@@ -100,11 +92,8 @@ def test_capture_with_zero_delay_adds_no_wait(client: CCAPIClient) -> None:
 
 
 def test_release_defaults_to_no_autofocus(client: CCAPIClient) -> None:
-    """AF hunts on film grain and breaks consistency across a roll.
-
-    The mock nudges focus when AF is requested, so an unchanged frame proves
-    autofocus was not asked for.
-    """
+    """AF hunts on grain. The mock nudges focus when AF is requested, so
+    unchanged settings prove it was not asked for."""
     caps = discover(client)
     before = client.get_json(caps.path("shooting_settings"))
     shutter_api.release(client, caps)
@@ -189,12 +178,10 @@ def test_movies_are_not_downloaded_as_scans(client: CCAPIClient) -> None:
 
 
 def test_a_movie_on_the_card_does_not_stall_the_listing(client: CCAPIClient) -> None:
-    """The regression test for a five-minute capture hang.
+    """Listing must stay fast and must not fetch file contents.
 
     Classifying entries as "image, therefore a file; anything else, therefore a
-    directory" made the walk request a movie as a listing, and the camera
-    answered with the whole video for us to parse as JSON. Listing must stay
-    fast and must not fetch file contents.
+    directory" made the walk request a movie as a listing.
     """
     caps = discover(client)
     shutter_api.release(client, caps)
@@ -216,10 +203,7 @@ def test_listing_walks_every_card(client: CCAPIClient) -> None:
 
 
 def test_unknown_file_types_are_never_walked_into(client: CCAPIClient) -> None:
-    """Anything with an extension is a file, whatever the extension is.
-
-    A new Canon file type must not become a directory the walker tries to fetch.
-    """
+    """Anything with an extension is a file, whatever the extension is."""
     assert contents_api._looks_like_a_file("/ccapi/ver130/contents/card1/X/IMG_1.CR4")
     assert contents_api._looks_like_a_file("/ccapi/ver130/contents/card1/X/CLIP.XYZ")
     assert not contents_api._looks_like_a_file("/ccapi/ver130/contents/card1")
@@ -227,8 +211,7 @@ def test_unknown_file_types_are_never_walked_into(client: CCAPIClient) -> None:
 
 
 def test_listing_ignores_a_response_that_is_not_a_listing(client: CCAPIClient) -> None:
-    """Belt and braces: a path that turns out to be a file is abandoned after
-    the headers rather than downloaded."""
+    """A path that turns out to be a file is abandoned after the headers."""
     caps = discover(client)
     shutter_api.release(client, caps)
     card = client.get_json(caps.path("contents"))["path"][0]

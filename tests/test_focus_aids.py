@@ -1,7 +1,7 @@
 """Tests for the focus aids: peaking and the sharpness metric.
 
-Pure functions over synthetic images, so the assertions can be about what the
-aids are *for* -- distinguishing sharp from soft -- rather than about pixels.
+Pure functions over synthetic images, so the assertions are about what the aids
+are for -- distinguishing sharp from soft -- rather than about pixels.
 """
 
 from __future__ import annotations
@@ -105,11 +105,9 @@ def test_peaking_rejects_grayscale_input() -> None:
 def test_peaking_must_run_before_the_loupe_not_after() -> None:
     """Peaking a magnified frame under-marks, so the pipeline peaks first.
 
-    Nearest-neighbour enlargement leaves flat blocks with a single step at each
-    boundary, so only boundaries can clear the threshold and the overlay grows
-    sparser the further you zoom -- backwards for a tool you reach for when you
-    want a closer look. This pins the ordering by showing what the wrong order
-    costs.
+    Nearest-neighbour enlargement leaves flat blocks with a step at each
+    boundary, so only boundaries clear the threshold and the overlay grows
+    sparser the further you zoom.
     """
     sharp = _sharp()
     before_zoom = peaking_coverage(sharp, sensitivity=0.5)
@@ -119,11 +117,10 @@ def test_peaking_must_run_before_the_loupe_not_after() -> None:
 
 
 def test_threshold_is_absolute_not_a_percentile() -> None:
-    """The property the whole aid depends on.
+    """Coverage must genuinely fall as focus degrades.
 
     A percentile threshold marks a fixed fraction of pixels by construction, so
-    it reports the same coverage on a sharp frame as on mush. Coverage must
-    genuinely fall as focus degrades.
+    it would report the same coverage on a sharp frame as on mush.
     """
     coverages = [
         peaking_coverage(
@@ -178,21 +175,16 @@ def test_region_sharpness_follows_the_region() -> None:
 
 
 def test_region_sharpness_clamps_at_edges_without_shrinking() -> None:
-    """A region near an edge must slide inward, not measure fewer pixels.
+    """A region near an edge slides inward rather than measuring fewer pixels,
+    which would drop the value and look like going out of focus.
 
-    Otherwise the value drops purely because less was measured, which looks
-    exactly like going out of focus.
-
-    Uses uniform noise rather than a synthetic negative: that fixture has a film
-    rebate, whose hard border falls inside a corner region and legitimately
-    scores far higher than the centre, which would mask the property under test.
+    Uniform noise rather than a synthetic negative, whose film rebate falls
+    inside a corner region and legitimately scores higher than the centre.
     """
     frame = np.random.default_rng(4).integers(0, 255, (300, 400, 3), dtype=np.uint8)
     centre = sharpness_of_region(frame, 0.5, 0.5, size=0.3)
     corner = sharpness_of_region(frame, 0.0, 0.0, size=0.3)
     assert corner > 0
-    # Statistically identical texture everywhere, so a clamped region measuring
-    # the same number of pixels must score within a few percent of the centre.
     assert 0.9 < corner / centre < 1.1
 
 
@@ -210,10 +202,7 @@ def test_corner_sharpness_reports_all_five_points() -> None:
 
 
 def test_corner_sharpness_detects_a_tilted_plane() -> None:
-    """A stand that is not parallel shows as one side softer than the other.
-
-    This is the measurement v0.4's alignment checker is built on.
-    """
+    """A stand that is not parallel shows as one side softer than the other."""
     rng = np.random.default_rng(3)
     frame = rng.integers(0, 255, (300, 400, 3), dtype=np.uint8)
     # Blur the right-hand side only, as a tilted film plane would.

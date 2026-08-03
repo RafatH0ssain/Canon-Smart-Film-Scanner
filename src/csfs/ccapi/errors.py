@@ -1,8 +1,7 @@
 """Exception types for the CCAPI client.
 
-The point of this hierarchy is that when something goes wrong at the copy stand
--- often mid-roll, with your hands covered in negatives -- the message tells you
-which of the handful of real-world causes it was, and what to do about it.
+Messages are written for someone standing at the copy stand mid-roll, so they
+name the likely real-world cause rather than restating a status code.
 """
 
 from __future__ import annotations
@@ -13,7 +12,7 @@ class CCAPIError(Exception):
 
 
 class CameraUnreachableError(CCAPIError):
-    """No HTTP response at all: wrong address, cable pulled, camera asleep."""
+    """No HTTP response: wrong address, cable pulled, camera asleep."""
 
     def __init__(self, base_url: str, cause: BaseException | None = None) -> None:
         super().__init__(
@@ -36,11 +35,10 @@ class CameraUnreachableError(CCAPIError):
 
 
 class CCAPINotActivatedError(CCAPIError):
-    """The camera answered, but CCAPI is not activated on this body.
+    """Something answered, but CCAPI is not activated on this body.
 
-    CCAPI must be unlocked once per camera using Canon's activation tool, which
-    you obtain from Canon's Developer Community. This is a one-time step and is
-    separate from enabling CCAPI in the camera's menu.
+    Activation is a one-time unlock with Canon's activation tool, separate from
+    enabling CCAPI in the camera's menu.
     """
 
     def __init__(self, base_url: str) -> None:
@@ -56,11 +54,10 @@ class CCAPINotActivatedError(CCAPIError):
 
 
 class CCAPIAuthError(CCAPIError):
-    """The camera rejected the request because it wants credentials.
+    """The camera wants credentials.
 
-    CCAPI uses HTTP digest authentication, and only when an account has been
-    registered on the camera under the CCAPI account settings. Most setups have
-    no account and need no credentials at all.
+    Only happens when an account is registered on the camera under its CCAPI
+    account settings; most setups have none.
     """
 
     def __init__(self, base_url: str) -> None:
@@ -77,11 +74,7 @@ class CCAPIAuthError(CCAPIError):
 
 
 class CCAPIBusyError(CCAPIError):
-    """The camera is temporarily unable to serve this request.
-
-    Usually means the camera is showing a menu, is mid-operation, or another
-    device already holds the single CCAPI connection the camera allows.
-    """
+    """The camera is temporarily unable to serve this request."""
 
     def __init__(self, url: str, message: str = "") -> None:
         detail = f"\nCamera said: {message}" if message else ""
@@ -108,11 +101,10 @@ class CCAPIResponseError(CCAPIError):
 
 
 class UnsupportedEndpointError(CCAPIError):
-    """This camera/API version does not offer the capability we asked for.
+    """This camera or API version does not offer the requested capability.
 
-    Raised rather than guessing a path. Different bodies expose different
-    subsets of CCAPI, which is why the client resolves capabilities from what
-    the camera reports instead of assuming a fixed map (see ``discovery.py``).
+    Raised rather than guessing a path: bodies expose different subsets, which
+    is why the client resolves capabilities from what the camera reports.
     """
 
     def __init__(self, capability: str, available: list[str] | None = None) -> None:
@@ -124,8 +116,8 @@ class UnsupportedEndpointError(CCAPIError):
                 + ("..." if len(available) > 40 else "")
             )
         msg += (
-            "\nIf your camera *should* support this, the capability's path hints in "
-            "csfs/ccapi/endpoints.py may need updating against your local copy of "
+            "\nIf your camera should support this, the path hints in "
+            "csfs/ccapi/endpoints.py may need updating against your copy of "
             "Canon's CCAPI reference."
         )
         super().__init__(msg)

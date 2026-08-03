@@ -1,18 +1,13 @@
-"""Verify the live-view path against a real camera.
-
-Bodies differ in which live-view transports they offer. Notably, not every
-camera has the standard multipart MJPEG endpoint, and the ones that don't fall
-back to Canon's own binary framing -- whose 4-byte length field this project
-could not confirm the byte order of from the reference alone.
-
-This tool answers that empirically:
+"""Check the live-view path against a real camera.
 
     python -m csfs.tools.check_liveview
 
-It reports which transport will be used, inspects the raw framing byte by byte
-if that transport is the binary one, then pulls frames through the real parser
-and decodes them. Output is safe to paste into a bug report -- it contains
-frame sizes and endpoint paths, no image content and no camera address.
+Reports which transport will be used, inspects the raw framing, then pulls
+frames through the real parser and decodes them. Bodies differ in which
+transports they offer, and not every one has the multipart endpoint.
+
+Output is safe to paste into a bug report: frame sizes and endpoint paths, no
+image content and no camera address.
 """
 
 from __future__ import annotations
@@ -34,14 +29,11 @@ _SCROLL_HEADER = b"\xff\x00\x00"
 
 
 def _analyse_framing(raw: bytes) -> None:
-    """Report how the chunked live-view stream is actually framed.
+    """Report how the chunked live-view stream is framed.
 
-    Two shapes are possible and are easy to confuse. The ``scroll`` endpoint
-    sends bare, concatenated JPEGs with no framing of Canon's own; the
-    ``scrolldetail`` endpoint wraps each frame in a marker, data type and 4-byte
-    length. This measures which one arrived, and for the framed shape settles
-    the byte order of the length field by comparing it against the JPEG's real
-    length as measured from its markers.
+    ``scroll`` sends bare concatenated JPEGs; ``scrolldetail`` wraps each frame
+    in a marker, data type and 4-byte length. For the framed shape this also
+    settles the length field's byte order against the JPEG's measured length.
     """
     print("\nSTREAM FRAMING ANALYSIS")
     print(f"  captured {len(raw)} raw bytes")
@@ -132,7 +124,7 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
 
-def _run(client: CCAPIClient, caps, args) -> int:  # noqa: ANN001
+def _run(client: CCAPIClient, caps, args) -> int:
     print("\nAVAILABLE LIVE-VIEW ENDPOINTS")
     for capability in (
         "liveview", "liveview_flip", "liveview_multipart",

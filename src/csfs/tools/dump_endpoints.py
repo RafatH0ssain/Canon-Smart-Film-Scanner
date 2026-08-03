@@ -1,20 +1,15 @@
 """Print every endpoint a camera reports, and which capability each one matched.
 
-This is the tool you run once, against your own body, with your own copy of
-Canon's reference open beside it. It answers the only question this project
-cannot answer for you: does ``csfs/ccapi/endpoints.py`` name things the way your
-camera does?
-
     python -m csfs.tools.dump_endpoints                    # against the mock
     python -m csfs.tools.dump_endpoints --base-url http://192.168.1.50:8080
 
-Anything listed under UNMATCHED is an endpoint your camera offers that this
-project does not yet know how to use. Anything under MISSING is a capability the
-code wants but could not find -- if your reference says your camera has it, add
-the distinguishing path segment to the hints in ``endpoints.py``.
+Run this once against your own body with your copy of Canon's reference open:
+it answers whether ``csfs/ccapi/endpoints.py`` names things the way your camera
+does. MISSING means a capability the code wants but could not find; UNMATCHED
+means an endpoint the camera offers that this project does not use.
 
-Output is safe to paste into a bug report: it contains endpoint paths, not your
-camera's address, serial number, or any personal data.
+Output is safe to paste into a bug report: endpoint paths only, no address,
+serial number or personal data.
 """
 
 from __future__ import annotations
@@ -55,8 +50,7 @@ def main(argv: list[str] | None = None) -> int:
         ) as client:
             caps = discover(client)
     except CCAPIError as exc:
-        # These messages are written to be actionable; print them plainly rather
-        # than as a traceback, since the reader is usually mid-setup.
+        # Print plainly rather than as a traceback; the reader is mid-setup.
         print(f"Could not query the camera.\n\n{exc}", file=sys.stderr)
         return 1
 

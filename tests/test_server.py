@@ -7,7 +7,7 @@ the CCAPI layer and the processing layer that neither's own tests can.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Iterator
+from collections.abc import Iterator
 
 import numpy as np
 import pytest

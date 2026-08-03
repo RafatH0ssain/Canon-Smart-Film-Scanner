@@ -1,22 +1,11 @@
 """Driving focus from the computer.
 
 CCAPI moves focus in six fixed increments -- three sizes in each direction --
-rather than by an arbitrary step count. They map naturally onto the coarse/fine
-controls a focusing workflow wants.
+rather than by a step count.
 
-Two constraints shape this module, both from Canon's reference:
-
-  - **Focus drive does not operate when AF operation is manual.** So the lens
-    must be in AF for the app to move focus at all. That is precisely why this
-    project computes focus peaking on the PC instead of relying on the camera's
-    own peaking display, which only appears in manual focus. You cannot have
-    the camera's peaking and remote focus drive at the same time; you can have
-    ours and remote focus drive.
-  - **It is unsupported on cameras with built-in lenses**, and does nothing
-    useful with a fully manual lens. Detection is therefore capability-based
-    with a runtime fallback: if the camera refuses a drive, the controller
-    records that and the UI hides the buttons rather than offering controls
-    that quietly do nothing.
+Focus drive does not operate when the camera is in manual focus, which is why
+this project computes its own focus peaking: the camera's peaking only shows in
+manual focus, so on the camera alone the two are mutually exclusive.
 """
 
 from __future__ import annotations
@@ -27,12 +16,10 @@ from dataclasses import dataclass
 from csfs.ccapi.client import CCAPIClient
 from csfs.ccapi.discovery import Capabilities
 from csfs.ccapi.errors import CCAPIError, UnsupportedEndpointError
-from csfs.ccapi.settings import read_setting
+from csfs.ccapi.settings import choose_supported, read_setting, write_setting
 
 logger = logging.getLogger(__name__)
 
-# Drive amounts CCAPI accepts, smallest first in each direction.
-# "near" pulls focus towards the camera, "far" pushes it away.
 STEP_SIZES: dict[str, str] = {"fine": "1", "medium": "2", "coarse": "3"}
 DIRECTIONS = ("near", "far")
 
@@ -41,8 +28,7 @@ def focus_value(direction: str, size: str = "fine") -> str:
     """Build the CCAPI drive value, e.g. ``("near", "coarse") -> "near3"``.
 
     Raises:
-        ValueError: On an unknown direction or size. These come from the UI, so
-            failing here beats sending the camera something it will reject.
+        ValueError: On an unknown direction or size.
     """
     if direction not in DIRECTIONS:
         raise ValueError(f"direction must be one of {DIRECTIONS}, got {direction!r}")
@@ -68,8 +54,8 @@ class LensInfo:
 def read_lens(client: CCAPIClient, caps: Capabilities) -> LensInfo:
     """Read lens information, tolerating bodies that do not report it.
 
-    Note this says nothing about whether the lens can autofocus -- CCAPI does
-    not expose that. It only tells us whether something is mounted.
+    Says nothing about whether the lens can autofocus -- CCAPI does not expose
+    that -- only whether something is mounted.
     """
     if not caps.has("lens"):
         return LensInfo(mounted=True, name="")
@@ -84,11 +70,10 @@ def read_lens(client: CCAPIClient, caps: Capabilities) -> LensInfo:
 class FocusController:
     """Drives focus, and knows when it cannot.
 
-    Availability starts optimistic -- based on what the camera reports -- and
-    turns pessimistic the first time a drive is actually refused. That ordering
-    matters: there is no way to ask a camera "would focus drive work?" without
-    moving focus, and moving the user's focus just to probe would be rude on a
-    rig they have carefully set up.
+    Availability starts from what the camera reports and turns pessimistic the
+    first time a drive is refused. There is no way to ask whether focus drive
+    would work without moving focus, and probing someone's carefully set focus
+    would be worse than finding out on the first press.
     """
 
     def __init__(self, client: CCAPIClient, capabilities: Capabilities) -> None:
@@ -101,11 +86,7 @@ class FocusController:
     @property
     def available(self) -> bool:
         """Whether focus can currently be driven from the app."""
-        return (
-            self._caps.has("focus_drive")
-            and self.lens.mounted
-            and not self._refused
-        )
+        return self._caps.has("focus_drive") and self.lens.mounted and not self._refused
 
     def unavailable_reason(self) -> str | None:
         """A short explanation for the UI, or None when focus drive works."""
@@ -142,68 +123,47 @@ class FocusController:
         try:
             self._client.post(path, json={"value": value})
         except CCAPIError as exc:
-            # The overwhelmingly common cause is the lens being in manual focus,
-            # so say that rather than echoing a status code.
             self._refused = True
             self.last_error = (
-                f"Focus drive was refused. The usual cause is the lens or camera "
-                f"being set to manual focus -- CCAPI cannot drive focus then. "
-                f"({exc})"
+                "Focus drive was refused. The usual cause is the lens or camera "
+                f"being set to manual focus. ({exc})"
             )
             logger.warning("Focus drive '%s' failed: %s", value, exc)
             return False
 
-        # A previously refused controller that now succeeds is working again,
-        # e.g. the user flicked the lens switch back to AF.
         self._refused = False
         self.last_error = None
-        logger.debug("Focus driven: %s", value)
         return True
 
     def recheck(self) -> None:
-        """Re-read lens state and clear a recorded refusal.
-
-        Called when the user asks the UI to look again, typically after moving
-        the AF/MF switch.
-        """
+        """Re-read lens state and clear a recorded refusal."""
         self.lens = read_lens(self._client, self._caps)
         self._refused = False
         self.last_error = None
 
 
 def prepare_for_scanning(client: CCAPIClient, caps: Capabilities) -> dict[str, str]:
-    """Put focus and drive settings into the state a copy stand wants.
+    """Put drive mode and AF operation into the state a copy stand wants.
 
-    Two settings cause real problems if left as they commonly are:
+    Continuous drive turns one remote release into a burst, and servo AF keeps
+    refocusing so frames of a roll are no longer captured at the same distance.
+    Best effort; a body that will not accept them is still usable.
 
-      - **Drive mode.** A body left on continuous will fire a burst from a
-        single remote release, filling the card with near-identical frames.
-      - **AF operation.** Servo AF keeps refocusing, so frames of one roll are
-        no longer captured at an identical focus distance -- which undoes the
-        consistency that makes batch inversion predictable.
-
-    Both are best-effort: a body that will not accept them is still usable.
-
-    Returns:
-        A mapping of setting name to the value actually applied, for logging
-        and for showing the user what was changed on their camera.
+    Returns the settings actually changed, so the UI can say what it touched.
     """
     applied: dict[str, str] = {}
-    from csfs.ccapi.settings import choose_supported, write_setting
 
     for capability, preference in (
         ("drive_mode", ("single",)),
         ("af_operation", ("oneshot",)),
     ):
         setting = read_setting(client, caps, capability)
-        if setting is None:
+        if setting is None or setting.value in preference:
             continue
-        if setting.value in preference:
-            continue  # already correct; do not write for the sake of it
         choice = choose_supported(preference, setting)
         if choice is None:
             logger.info(
-                "Camera does not offer %s=%s (has: %s); leaving it alone.",
+                "Camera does not offer %s=%s (has: %s).",
                 capability, preference[0], ", ".join(setting.ability) or "unknown",
             )
             continue

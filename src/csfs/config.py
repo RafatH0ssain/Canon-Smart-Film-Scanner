@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass, field, fields, is_dataclass
-from functools import lru_cache
+from functools import cache
 from pathlib import Path
 from typing import Any, get_type_hints
 
@@ -100,24 +100,21 @@ class Config:
     mock: MockConfig = field(default_factory=MockConfig)
 
 
-@lru_cache(maxsize=None)
+@cache
 def _field_types(cls: type) -> dict[str, Any]:
     """Real types for a config dataclass's fields.
 
-    ``dataclasses.fields()`` reports annotations as *strings* under
+    ``dataclasses.fields()`` reports annotations as strings under
     ``from __future__ import annotations``, so comparing them to ``bool`` never
-    matches and every value silently stays a string. ``get_type_hints`` resolves
-    them to actual types. Cached because this is called per setting per load.
+    matches and values silently stay strings.
     """
     return get_type_hints(cls)
 
 
 def _coerce(value: Any, target_type: Any) -> Any:
-    """Convert a raw YAML/env value to the type the dataclass field declares.
+    """Convert a raw YAML/env value to the declared field type.
 
-    Environment variables arrive as strings, so ``"1.5"`` has to become a float
-    and ``"false"`` has to become ``False`` -- note that plain ``bool("false")``
-    is ``True``, which is exactly the bug this function exists to prevent.
+    Environment variables arrive as strings, and ``bool("false")`` is ``True``.
     """
     if target_type is bool:
         if isinstance(value, bool):
@@ -163,17 +160,14 @@ def load_config(path: Path | str | None = None) -> Config:
     Args:
         path: Explicit path to a YAML config file. If omitted, ``config.yaml``
             in the repository root is used when it exists. A missing default
-            file is not an error -- the built-in defaults point at the mock
-            server, so a fresh clone runs with no configuration at all.
-
-    Returns:
-        A fully populated :class:`Config`.
+            file is not an error: the defaults point at the mock server, so a
+            fresh clone runs with no configuration at all.
 
     Raises:
         FileNotFoundError: If an explicit ``path`` was given but does not exist.
-        ValueError: If the file contains an unknown section or setting. This is
-            deliberately strict: a silently ignored typo in your camera's
-            address is far more annoying to debug than an error at startup.
+        ValueError: On an unknown section or setting. Strict on purpose -- a
+            silently ignored typo in the camera address is worse to debug than
+            an error at startup.
     """
     config = Config()
 

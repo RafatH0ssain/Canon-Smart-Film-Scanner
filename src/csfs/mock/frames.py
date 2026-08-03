@@ -1,19 +1,10 @@
-"""Synthetic film-negative frame generation for the mock camera.
+"""Synthetic film negatives for the mock camera.
 
-These frames are not decoration. They are the fixtures the inversion pipeline is
-developed against, so they model the things that actually make film inversion
-hard:
-
-  - A **film rebate**: the unexposed border of the film strip. On colour stock
-    this is the pure orange mask, and it is the reference v0.3 samples to
-    neutralise the cast. A test image without a rebate would let a wrong
-    inversion look right.
-  - An **orange mask** across the whole colour frame, not just the border.
-  - **Density inversion**: bright subject areas are dark on the negative.
-  - **Grain**: high-frequency noise, which is what focus peaking and the
-    sharpness metric key off, and what you actually focus on at the copy stand.
-  - **Limited density range**: real negatives never span 0-255, which is why
-    naive ``255 - x`` inversion gives flat, milky positives.
+These are the fixtures the inversion pipeline is developed against, so they
+model what makes film inversion hard: a film rebate (the unexposed border, and
+the reference v0.3 samples to neutralise the cast), an orange mask across the
+whole colour frame, density inversion, grain, and a compressed density range --
+real negatives never span 0-255, which is why naive inversion looks milky.
 """
 
 from __future__ import annotations
@@ -34,8 +25,8 @@ _DENSITY_CEILING = 0.78
 def _base_scene(height: int, width: int, phase: float) -> np.ndarray:
     """A synthetic positive 'photograph' in float [0, 1], shape (H, W).
 
-    Deliberately contains a range of tones and some hard edges, so that both the
-    tone-curve work and the focus aids have something meaningful to measure.
+    Contains a range of tones and some hard edges, so both the tone-curve work
+    and the focus aids have something to measure.
     """
     yy, xx = np.mgrid[0:height, 0:width].astype(np.float32)
     xn = xx / max(width - 1, 1)
@@ -69,10 +60,9 @@ def _apply_grain(image: np.ndarray, rng: np.random.Generator, strength: float) -
 
 
 def _blur(image: np.ndarray, radius: int) -> np.ndarray:
-    """Cheap separable box blur, used to simulate being out of focus.
+    """Cheap separable box blur simulating defocus.
 
-    Implemented with cumulative sums rather than cv2 so this module has no
-    dependency beyond numpy and stays usable as a pure test fixture.
+    Cumulative sums rather than cv2, so this module needs only numpy.
     """
     if radius < 1:
         return image
@@ -153,11 +143,9 @@ def make_negative(
     mask_area[border_y : height - border_y, border_x : width - border_x] = False
     frame[mask_area] = np.broadcast_to(base_color, (height, width, 3))[mask_area]
 
-    # Grain, then defocus -- in that order and after the rebate is in place,
-    # because both are properties of the whole film frame. Compositing the
-    # rebate after the blur would leave the border permanently sharp, which
-    # would let a badly defocused frame still show strong edges and make any
-    # focus aid tested against it look like it worked.
+    # Grain then defocus, both after the rebate is in place: they are properties
+    # of the whole frame. Compositing the rebate afterwards would leave the
+    # border permanently sharp and make any focus aid look like it worked.
     frame = _apply_grain(frame, rng, grain)
 
     if focus_error > 0:

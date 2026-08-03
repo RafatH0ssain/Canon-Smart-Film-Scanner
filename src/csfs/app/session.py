@@ -1,23 +1,19 @@
 """The scanning session: one camera, one live-view pump, one set of preview settings.
 
-Two things here are worth understanding before changing anything.
+Exactly one live-view stream exists at a time. A background thread pulls frames
+and publishes the most recent one; every viewer reads from that, so a slow
+viewer drops frames instead of backing up the camera, and a reloaded browser tab
+cannot open a second stream.
 
-**Exactly one live-view stream.** The camera will not sensibly serve several
-concurrent live-view requests, and a browser tab that reloads must not open a
-second one. So a single background thread pulls frames and publishes the most
-recent one; every viewer reads from that. A slow viewer therefore drops frames
-instead of backing up the camera, which is the right trade for a preview.
-
-**The pump publishes raw frames.** Inversion and the loupe are applied per
-viewer, at serve time, not in the pump. Toggling invert then costs nothing and
-takes effect on the next frame, and two browser windows can show different
-things without a second stream.
+The pump publishes raw frames. Inversion, peaking and the loupe are applied per
+viewer at serve time, so toggling is instant and two windows can differ.
 """
 
 from __future__ import annotations
 
 import logging
 import threading
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -32,25 +28,18 @@ from csfs.config import Config
 
 logger = logging.getLogger(__name__)
 
-
-class CaptureInProgressError(RuntimeError):
-    """Raised when a capture is requested while one is already running."""
-
-# Settings surfaced in the UI. Each is optional -- a body that lacks one simply
-# does not show it.
 _REPORTED_SETTINGS = (
     "iso", "aperture", "shutter_speed", "white_balance",
     "shutter_mode", "af_operation", "drive_mode",
 )
 
-# Settings the UI may change. Deliberately a short allow-list: these are the
-# ones that matter for scanning and are simple flat values. Others -- image
-# quality reports a nested {raw, heif} object rather than a single value --
-# need their own handling and are not exposed by accident.
-_WRITABLE_SETTINGS = frozenset(
-    {"iso", "aperture", "shutter_speed", "white_balance", "shutter_mode",
-     "af_operation", "drive_mode"}
-)
+# An allow-list, so a typo cannot reach the camera as some other setting. Image
+# quality is excluded: it reports a nested {raw, heif} object, not a flat value.
+_WRITABLE_SETTINGS = frozenset(_REPORTED_SETTINGS)
+
+
+class CaptureInProgressError(RuntimeError):
+    """Raised when a capture or connect is requested while one is running."""
 
 
 @dataclass
@@ -105,11 +94,10 @@ class FramePump:
                     self._sequence += 1
                     self._condition.notify_all()
         except CCAPIError as exc:
-            # The camera went away mid-stream. Record it for the UI rather than
-            # dying silently in a thread nobody is watching.
+            # Record it for the UI rather than dying silently in a thread.
             self._error = str(exc)
             logger.warning("Live-view pump stopped: %s", exc)
-        except Exception as exc:  # noqa: BLE001 - a thread must not die unexplained
+        except Exception as exc:
             self._error = f"{type(exc).__name__}: {exc}"
             logger.exception("Live-view pump crashed.")
         finally:
@@ -129,8 +117,8 @@ class FramePump:
         """Wait for a frame newer than sequence ``after``.
 
         Returns ``(jpeg, sequence)``, or None on timeout or when the pump stops.
-        Viewers pass back the sequence they last saw, which is what makes a slow
-        viewer skip frames rather than queue them.
+        Passing back the last sequence seen is what makes a slow viewer skip
+        frames rather than queue them.
         """
         with self._condition:
             if self._sequence <= after:
@@ -142,7 +130,7 @@ class FramePump:
 
 @dataclass
 class ScanSession:
-    """Everything one scanning session needs. Not thread-safe for connect/disconnect."""
+    """Everything one scanning session needs."""
 
     config: Config
     client: CCAPIClient | None = None
@@ -153,11 +141,10 @@ class ScanSession:
     shutter_mode: str | None = None
     last_capture: str | None = None
     focus: focus_api.FocusController | None = None
-    # Settings the app changed on the camera at connect time, so the UI can say
-    # plainly what it touched rather than silently reconfiguring someone's body.
+    # Settings the app changed on the camera, so the UI can say what it touched.
     prepared: dict[str, str] = field(default_factory=dict)
-    # Best sharpness seen since the last reset. Focusing is a hill-climb, so a
-    # reading only means something next to the best found so far.
+    # Focusing is a hill-climb, so a reading only means something next to the
+    # best found so far.
     best_sharpness: float = 0.0
     _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
     _connect_lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
@@ -169,14 +156,11 @@ class ScanSession:
     def connect(self) -> Capabilities:
         """Connect, discover capabilities, and prepare the camera for scanning.
 
-        Preparation is deliberately non-fatal: a body that will not let us
-        select the electronic shutter or disable auto power-off is still
-        perfectly usable for scanning, just slightly less convenient. Refusing
-        to connect over it would be the wrong call.
+        Preparation is non-fatal: a body that will not accept the electronic
+        shutter or disable auto power-off is still usable.
 
-        Refuses to run twice at once. Connecting involves a dozen round trips,
-        so an impatient second click would otherwise tear down the connection
-        the first one was still building.
+        Refuses to run twice at once, or an impatient second click would tear
+        down the connection the first is still building.
         """
         if not self._connect_lock.acquire(blocking=False):
             raise CaptureInProgressError("Already connecting. Give it a moment.")
@@ -210,7 +194,6 @@ class ScanSession:
         settings_api.disable_auto_power_off(client, capabilities)
 
         if self.config.capture.prepare_camera_for_scanning:
-            # Changes the user's camera, so it is announced and switchable off.
             self.prepared = focus_api.prepare_for_scanning(client, capabilities)
             if self.prepared:
                 logger.info(
@@ -244,36 +227,28 @@ class ScanSession:
         self.focus = None
         self.prepared = {}
 
-    # -- actions ------------------------------------------------------------
-
     def capture(self) -> Path:
         """Settle, fire the shutter, then download what the camera wrote.
 
-        Serialised with a lock: firing a second exposure while the first is
-        still being identified would make the two indistinguishable, and it is
-        an easy thing to do by leaning on a keyboard shortcut.
-
-        Returns:
-            The local path of the downloaded file.
+        Returns the local path of the downloaded file.
 
         Raises:
             RuntimeError: If not connected, or if no new file appeared.
+            CaptureInProgressError: If a capture is already running.
         """
         if not self.connected:
             raise RuntimeError("Not connected to a camera.")
         assert self.client is not None and self.capabilities is not None
 
-        # Refuse rather than queue. Blocking here meant every extra click -- or
-        # every extra browser tab -- parked a thread behind the first capture
-        # indefinitely, so one slow capture became a pile of stuck requests.
+        # Refuse rather than queue: blocking here parked a thread per extra
+        # click or browser tab behind the first capture.
         if not self._lock.acquire(blocking=False):
             raise CaptureInProgressError(
                 "A capture is already in progress. Wait for it to finish."
             )
         try:
-            # Snapshot first so the new file can be identified by difference.
-            # More reliable than assuming the highest-numbered name is new, which
-            # breaks on a card whose numbering has wrapped.
+            # Snapshot first so the new file is found by difference, which
+            # survives a card whose numbering has wrapped.
             before = set(contents_api.list_images(self.client, self.capabilities))
 
             shutter_api.capture(
@@ -304,12 +279,9 @@ class ScanSession:
     def _wait_for_new_image(self, before: set[str], timeout_s: float = 30.0) -> str | None:
         """Poll the card until a file appears that was not there before.
 
-        Writing a file takes a variable amount of time -- buffer depth, card
-        speed, image size -- so polling for the actual result beats sleeping for
-        a guessed interval.
+        Writing takes a variable amount of time, so polling for the result beats
+        sleeping for a guessed interval.
         """
-        import time
-
         assert self.client is not None and self.capabilities is not None
         deadline = time.monotonic() + timeout_s
         while time.monotonic() < deadline:
@@ -331,11 +303,7 @@ class ScanSession:
         }
 
     def note_sharpness(self, value: float) -> None:
-        """Record a sharpness reading, keeping the best seen.
-
-        Focusing is a hill-climb: you turn past the peak and come back. Knowing
-        the best value so far is what makes the current reading interpretable.
-        """
+        """Record a sharpness reading, keeping the best seen."""
         self.best_sharpness = max(self.best_sharpness, value)
 
     def write_setting(self, name: str, value: str) -> tuple[bool, str]:
@@ -349,8 +317,8 @@ class ScanSession:
         if not self.capabilities.has(name):
             return False, f"This camera does not expose '{name}'."
 
-        # Check against what the camera says it will accept right now, so the
-        # user gets a clear reason instead of a bare rejection from the body.
+        # Check against what the camera says it accepts right now, so the user
+        # gets a reason rather than a bare rejection.
         current = settings_api.read_setting(self.client, self.capabilities, name)
         if current is not None and not current.can_set(value):
             return False, (
@@ -362,11 +330,7 @@ class ScanSession:
         return False, f"The camera refused {name}={value}."
 
     def set_camera_zoom(self, value: str) -> bool:
-        """Set camera-side live-view magnification.
-
-        Preferred over the software loupe where available, because it returns
-        real sensor detail rather than enlarging pixels the camera discarded.
-        """
+        """Set camera-side live-view magnification, where the body has it."""
         if not self.connected:
             return False
         assert self.client is not None and self.capabilities is not None

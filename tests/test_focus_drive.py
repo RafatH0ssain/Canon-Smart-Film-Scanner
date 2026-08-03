@@ -1,9 +1,7 @@
 """Tests for driving focus over CCAPI.
 
-The payload shape here is the one Canon documents -- a single ``value`` field
-carrying one of six fixed increments -- not a direction plus a step count. An
-earlier version of this project invented the latter, which is exactly the class
-of mistake these tests exist to prevent.
+The payload is a single ``value`` field carrying one of six fixed increments,
+not a direction plus a step count.
 """
 
 from __future__ import annotations
@@ -97,8 +95,7 @@ def test_focus_drive_actually_changes_focus(client: CCAPIClient) -> None:
 def test_manual_focus_makes_focus_drive_unavailable(
     client: CCAPIClient, mock_camera_url: str
 ) -> None:
-    """CCAPI cannot drive focus in manual focus -- the constraint that makes
-    the camera's own peaking and remote focus drive mutually exclusive."""
+    """CCAPI cannot drive focus while the camera is in manual focus."""
     caps = discover(client)
     requests.post(f"{mock_camera_url}/__mock/lens", json={"manual_focus": True}, timeout=5)
 
@@ -155,7 +152,7 @@ def test_lens_name_is_reported_for_the_ui(client: CCAPIClient) -> None:
 
 
 def test_preparation_sets_single_drive_and_oneshot_af(client: CCAPIClient) -> None:
-    """Continuous drive turns one remote release into a burst; servo AF drifts."""
+    """Continuous drive fires a burst from one release; servo AF drifts."""
     caps = discover(client)
     assert read_setting(client, caps, "drive_mode").value == "lowspeed"
     assert read_setting(client, caps, "af_operation").value == "servo"

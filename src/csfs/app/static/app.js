@@ -1,8 +1,4 @@
-/* Canon Smart Film Scan -- browser UI.
- *
- * Deliberately plain: no framework, no build step. Someone who has not written
- * front-end code in years should be able to read and change this.
- */
+/* Canon Smart Film Scan -- browser UI. No framework, no build step. */
 
 const $ = (id) => document.getElementById(id);
 
@@ -41,7 +37,6 @@ const el = {
   settle: $("settle"),
   shutterMode: $("shutter-mode"),
   outputDir: $("output-dir"),
-  settings: $("settings"),
   captures: $("captures"),
   toast: $("toast"),
 };
@@ -160,8 +155,7 @@ function renderSettings(settings) {
     el.settingsControls.innerHTML = `<p class="note">Not connected.</p>`;
     return;
   }
-  // Rebuilding the controls on every poll would fight the user mid-selection,
-  // so only redraw when the set of settings or their options actually changes.
+  // Only redraw when something changed, or the poll fights the user mid-select.
   const signature = JSON.stringify(settings);
   if (el.settingsControls.dataset.signature === signature) return;
   el.settingsControls.dataset.signature = signature;
@@ -264,10 +258,8 @@ async function capture() {
   el.captureStatus.hidden = false;
   el.captureStatus.className = "capture-status busy";
 
-  // A capture is settle delay + exposure + waiting for the card + downloading a
-  // file that can be tens of megabytes over Wi-Fi. A static message makes a slow
-  // but healthy capture indistinguishable from a hang, so show elapsed time and
-  // say what is happening at each stage.
+  // A capture can take 30s, mostly downloading tens of megabytes over Wi-Fi.
+  // Show elapsed time so slow-but-healthy does not look like a hang.
   const started = Date.now();
   const tick = setInterval(() => {
     const secs = Math.round((Date.now() - started) / 1000);
@@ -332,9 +324,8 @@ el.focusRecheck.addEventListener("click", async () => {
 
 /* ---------- sharpness ---------- */
 
-// Scales the bar. Laplacian variance has no natural maximum, so the bar is
-// drawn relative to the best reading of this session -- which is the only
-// comparison that means anything anyway.
+// The metric has no natural maximum, so the bar is drawn relative to the best
+// reading of this session.
 function renderSharpness(data) {
   el.sharpnessBlock.hidden = false;
   el.sharpnessNow.textContent = data.sharpness.toFixed(1);
@@ -383,8 +374,7 @@ document.addEventListener("keydown", (event) => {
   // Ignore shortcuts while typing, and let the browser keep its own combos.
   if (event.target.matches("input, textarea, select") || event.metaKey || event.ctrlKey) return;
 
-  // Focus stepping: modifiers pick the step size, so one pair of keys covers
-  // fine, medium and coarse without needing six bindings.
+  // Modifiers pick the step size, so one pair of keys covers all three.
   if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
     event.preventDefault();
     const size = event.altKey ? "coarse" : event.shiftKey ? "medium" : "fine";
@@ -413,6 +403,5 @@ document.addEventListener("keydown", (event) => {
 
 refresh();
 refreshCaptures();
-// Slow poll: keeps settings and stream health current without hammering the
-// camera, which is busy serving live view.
+// Slow poll: the camera is busy serving live view.
 setInterval(refresh, 5000);

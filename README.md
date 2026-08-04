@@ -19,7 +19,7 @@ Camera scanning gives excellent results but has three chronic annoyances, and th
 | Nailing focus on film *grain* is hard on a small rear screen | Big live view on your monitor, with a magnified loupe, focus peaking, and a numeric sharpness readout |
 | Framing and reviewing negatives is unintuitive | **Real-time inversion** — you work in positive |
 
-There is a sibling project, Canon EDSDK Film Scanner, that does the same job over EOS Digital SDK. It works, and if wireless live view feels laggy on your rig, you should use that one instead.
+There is a sibling project, **Canon EDSDK Film Scanner**, that does the same job over EOS Digital SDK. It works, and if wireless live view feels laggy on your rig, you should use that one instead.
 
 ## What it deliberately does *not* do
 

@@ -1,4 +1,4 @@
-# Canon Smart Film Scan
+# Canon Smart Film Scanner
 
 Digitize film negatives with a Canon camera on a copy stand — focusing, framing, and firing the shutter entirely from your computer, with a **live positive preview** so you never have to squint at an inverted image again.
 
@@ -19,6 +19,8 @@ Camera scanning gives excellent results but has three chronic annoyances, and th
 | Nailing focus on film *grain* is hard on a small rear screen | Big live view on your monitor, with a magnified loupe, focus peaking, and a numeric sharpness readout |
 | Framing and reviewing negatives is unintuitive | **Real-time inversion** — you work in positive |
 
+There is a sibling project, Canon EDSDK Film Scanner, that does the same job over EOS Digital SDK. It works, and if wireless live view feels laggy on your rig, you should use that one instead.
+
 ## What it deliberately does *not* do
 
 This tool controls the camera from outside, over a documented API. **It never modifies camera firmware.** So it cannot change what the camera's own screen shows, cannot bake looks into the files the camera writes to its card, and cannot unlock features the firmware doesn't already expose.
@@ -33,7 +35,7 @@ You do not need a camera, or CCAPI access, to run this project. A **mock camera*
 
 ```bash
 git clone <your-fork-url>
-cd "Canon Smart Film Scan"
+cd "Canon Smart Film Scanner"
 
 python -m venv .venv
 # Windows:        .venv\Scripts\activate

@@ -72,7 +72,13 @@ def test_capture_waits_the_settle_delay_before_firing(client: CCAPIClient) -> No
         shutter_api.release = original  # type: ignore[assignment]
 
     assert fired_at, "shutter never fired"
-    assert fired_at[0] - started >= 0.4
+
+    # Windows' default timer granularity is ~15.6 ms and time.sleep can return
+    # early inside it, so a 0.4 s wait legitimately measures 0.391 s there --
+    # which failed this assertion in CI. The point is that the wait happened
+    # before the exposure, not that the clock was exact to the millisecond.
+    waited = fired_at[0] - started
+    assert waited >= 0.4 - 0.02, f"fired after only {waited:.3f} s"
 
 
 def test_capture_with_zero_delay_adds_no_wait(client: CCAPIClient) -> None:

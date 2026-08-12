@@ -26,6 +26,7 @@ from pydantic import BaseModel, Field
 from csfs.app.session import CaptureInProgressError, ScanSession
 from csfs.ccapi.errors import CCAPIError
 from csfs.config import Config, load_config
+from csfs.paths import static_dir
 from csfs.processing.codec import DecodeError, decode_jpeg, encode_jpeg
 from csfs.processing.invert import invert_linear
 from csfs.processing.loupe import crop_zoom
@@ -34,7 +35,7 @@ from csfs.processing.sharpness import corner_sharpness, sharpness_of_region
 
 logger = logging.getLogger(__name__)
 
-STATIC_DIR = Path(__file__).parent / "static"
+STATIC_DIR = static_dir()
 
 # Boundary for the MJPEG we serve to the browser. Unrelated to the camera's.
 _BOUNDARY = "csfsframe"

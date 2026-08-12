@@ -1,240 +1,144 @@
 # Canon Smart Film Scanner
 
-Digitize film negatives with a Canon camera on a copy stand — focusing, framing, and firing the shutter entirely from your computer, with a **live positive preview** so you never have to squint at an inverted image again.
+Scan film negatives with a Canon camera on a copy stand — live positive preview, remote focus and shutter, over Wi-Fi.
 
-Built on [CCAPI](https://developercommunity.usa.canon.com/), Canon's official Camera Control API. Works with black-and-white **and** colour negatives.
+Built on [CCAPI](https://developercommunity.usa.canon.com/), Canon's Camera Control API. No native dependencies, plain `pip install`.
 
-> **Status: v0.1 works against the mock camera.**
-> Live view, magnified focus loupe, electronic shutter with settle delay, invert toggle, and auto-download are all working, calibrated against Canon's CCAPI Reference v1.4.0. **No real camera has confirmed any of it yet.** See [ROADMAP.md](ROADMAP.md).
-
----
+> **Status: works on a real camera.** Live-view streaming and capture were both fixed against real hardware. Colour inversion is still the v0.1 linear flip, so **colour negatives preview cyan** — the orange mask isn't neutralised yet. Black and white is fine. Captured files are never affected; inversion is preview-only.
 
 ## Why
 
-Camera scanning gives excellent results but has three chronic annoyances, and this tool targets all three:
-
 | Problem | Fix |
 |---|---|
-| Pressing the shutter shakes the rig and softens the scan | Remote shutter + **electronic shutter** + a configurable **settle delay** |
-| Nailing focus on film *grain* is hard on a small rear screen | Big live view on your monitor, with a magnified loupe, focus peaking, and a numeric sharpness readout |
-| Framing and reviewing negatives is unintuitive | **Real-time inversion** — you work in positive |
+| Pressing the shutter shakes the rig and softens the scan | Remote shutter, electronic shutter, configurable settle delay |
+| Judging focus on grain is hard on a small rear screen | Big live view, magnified loupe, focus peaking, numeric sharpness |
+| Framing and reviewing negatives is unintuitive | Real-time inversion — you work in positive |
 
-There is a sibling project, **Canon EDSDK Film Scanner**, that does the same job over EOS Digital SDK. It works, and if wireless live view feels laggy on your rig, you should use that one instead.
+CCAPI controls the camera from outside and never modifies firmware, so it can't change what the camera's own screen shows or bake looks into the files it writes. All processing happens on the computer, which is what film scanning wants.
 
-## What it deliberately does *not* do
+**Expect roughly 4 fps at 960×640, or 11 fps at 640×424.** CCAPI has no USB transport and the link is the limit. If that's too slow to focus by, the sibling project **Canon EDSDK Film Scanner** does the same job over USB at ~60 fps — at the cost of a native SDK you must obtain from Canon, and a cable.
 
-This tool controls the camera from outside, over a documented API. **It never modifies camera firmware.** So it cannot change what the camera's own screen shows, cannot bake looks into the files the camera writes to its card, and cannot unlock features the firmware doesn't already expose.
+## Try it with no camera
 
-All processing happens on the computer. For film scanning that is exactly what you want, but it's worth stating plainly so expectations are right.
-
----
-
-## Try it right now, with no camera
-
-You do not need a camera, or CCAPI access, to run this project. A **mock camera** serves synthetic film negatives — complete with an orange mask and a film rebate — over the same API a real body uses.
-
-**macOS / Linux:**
+A mock camera serves synthetic negatives — orange mask, rebate, grain — over the same API a real body uses.
 
 ```bash
-git clone <your-fork-url>
-cd "Canon Smart Film Scanner"
-
-python3 -m venv .venv
-source .venv/bin/activate
-
-pip install -r requirements.txt
-pip install -e .
+python3 -m venv .venv && source .venv/bin/activate    # Windows: .venv\Scripts\activate
+pip install -r requirements.txt -e .
 ```
 
-**Windows:**
+Use Python **3.10–3.13**; `opencv-python` wheels lag newer releases. macOS ships 3.9, which is too old — `brew install python@3.12` and build the venv from `python3.12` explicitly.
 
-```bat
-git clone <your-fork-url>
-cd "Canon Smart Film Scanner"
-
-python -m venv .venv
-.venv\Scripts\activate
-
-pip install -r requirements.txt
-pip install -e .
-```
-
-> **On macOS, use `python3`, not `python`** — there is no `python` command on a stock system. Check what you have with `python3 -V` first: macOS ships **3.9**, which is *older than this project needs*. Install a supported one with [Homebrew](https://brew.sh) and build the venv from it explicitly:
->
-> ```bash
-> brew install python@3.12
-> python3.12 -m venv .venv
-> ```
->
-> Every command below assumes the venv is activated — your prompt shows `(.venv)`. Inside it, plain `python` works on every platform.
-
-Start the mock camera in one terminal:
+Two terminals:
 
 ```bash
-python -m csfs.mock.mock_server
+python -m csfs.mock.mock_server     # one
+python -m csfs.app.server           # the other
 ```
 
-Start the app in a second:
+<http://127.0.0.1:8000>, press **Connect**. **Capture** downloads a full-resolution file to `captures/`.
 
-```bash
-python -m csfs.app.server
-```
+`pytest` runs 245 tests, which start their own mock and need nothing else running.
 
-Open <http://127.0.0.1:8000>, press **Connect**, and you'll get a live view of a synthetic film negative — orange mask, film rebate, grain and all. Press **Capture** and a full-resolution file downloads to `captures/`.
+### Controls
 
-To see what the camera reports it can do:
-
-```bash
-python -m csfs.tools.dump_endpoints
-```
-
-Run the tests (they start their own mock; nothing else needs to be running):
-
-```bash
-pytest
-```
-
-### Using the app
-
-| Control | Keyboard | What it does |
+| | Key | |
 |---|---|---|
-| Invert | <kbd>I</kbd> | Show a positive instead of a negative |
-| Loupe | <kbd>L</kbd> | Magnify a region to judge grain focus. Click the image to move it |
-| Focus peaking | <kbd>P</kbd> | Mark the sharpest edges in red |
-| Focus near/far | <kbd>←</kbd> <kbd>→</kbd> | Drive focus. <kbd>Shift</kbd> = medium step, <kbd>Alt</kbd> = coarse |
-| Measure sharpness | <kbd>M</kbd> | Numeric focus reading for the loupe region, plus per-corner values |
+| Invert | <kbd>I</kbd> | Positive instead of negative |
+| Loupe | <kbd>L</kbd> | Magnify to judge grain. Click the image to move it |
+| Peaking | <kbd>P</kbd> | Mark sharpest edges in red |
+| Focus | <kbd>←</kbd> <kbd>→</kbd> | <kbd>Shift</kbd> medium step, <kbd>Alt</kbd> coarse |
+| Sharpness | <kbd>M</kbd> | Numeric reading for the loupe region, plus per-corner |
 | Capture | <kbd>Space</kbd> | Settle, fire, download |
-| Camera zoom | — | 1× / 5× / 10× **on the camera**, where the body supports it |
 
-**Focus peaking works in autofocus mode** — unlike the camera's own peaking, which only appears in manual focus. That matters because **CCAPI cannot drive focus when focus is manual**, so on the camera alone you must choose between peaking and remote focus control. Here you get both, because peaking is computed on the computer from the live-view stream.
+Peaking works in **autofocus** mode, unlike the camera's own, which only appears in manual focus — and CCAPI cannot drive focus when focus is manual. On the camera alone you must choose; here you get both, because peaking is computed on the computer.
 
-**The sharpness readout is relative, not absolute.** Turn focus and watch it peak; the bar is drawn against the best reading of the session. Comparing values between different negatives means nothing. The per-corner figures are useful on their own: if one corner sits consistently lower, your copy stand isn't parallel to the film.
+The sharpness readout is **relative** — turn focus and watch it peak. Comparing values between negatives means nothing. The per-corner figures do stand alone: one corner consistently lower means your copy stand isn't parallel to the film.
 
-**Camera zoom beats software zoom where it exists.** Camera-side magnification returns real sensor detail; the software loupe can only enlarge pixels the camera already discarded when it downscaled the stream. Note that **not every body offers it** — the EOS R7 does not, so the loupe is the only magnification there. The control is hidden when unsupported.
+Camera-side zoom (1×/5×/10×) returns real sensor detail where the software loupe can only enlarge pixels the camera already discarded. Not every body has it — the R7 doesn't — and the control is hidden when unsupported.
 
-### What the app changes on your camera
+### What it changes on your camera
 
-On connect it sets, and tells you it has:
+On connect, and it tells you: **electronic shutter** (falls back to first-curtain), **drive mode → single** (continuous turns one release into a burst), **AF → one-shot** (servo would refocus between frames), **auto power-off → disabled** (a sleeping camera looks exactly like a network fault).
 
-- **Electronic shutter** — no mechanical shock (falls back to electronic first curtain, then leaves it alone).
-- **Drive mode → single** — continuous drive turns one remote release into a burst.
-- **AF operation → one-shot** — servo AF keeps refocusing, so frames of a roll wouldn't share a focus distance.
-- **Auto power-off → disabled** — a sleeping camera looks exactly like a network fault.
+Set `capture.prepare_camera_for_scanning: false` to leave everything alone.
 
-Set `capture.prepare_camera_for_scanning: false` in `config.yaml` if you'd rather it changed nothing.
+## Canon-side setup
 
-> **Colour negatives look cyan in v0.1.** The invert toggle is a plain linear flip, which is genuinely useful for black & white but leaves colour film with the inverse of its orange mask. Neutralising that mask properly is [v0.3](ROADMAP.md#v03--inversion-done-properly-bw-and-color) and needs a real pipeline, not a tweak. Your captured files are unaffected — inversion is preview-only for now, and the original is always kept.
+Done once, on Canon's website and the camera itself. Can't be automated.
 
-> **Python version note:** use **3.10–3.13**. `opencv-python` wheels lag new Python releases, and on 3.14 pip may try to build OpenCV from source, which is a bad time on any platform.
+⚠️ **Canon's licence forbids redistributing the activation tool or the API reference.** Keep both outside this repo, or in `ccapi_reference/`, which is git-ignored. Never commit them or paste the reference into an issue.
 
----
+> CCAPI connects over **Wi-Fi or wired LAN, not USB**. The cable is only for the one-time activation in step 3. Most enthusiast bodies (R7 included) have no Ethernet, so Wi-Fi through your access point is the realistic setup.
 
-## Canon-side setup (for using a real camera)
+1. Update the camera's firmware, then [register with Canon's Developer Community](https://developercommunity.usa.canon.com/) and request CCAPI access. Approval isn't instant.
+2. Download the activation tool and API reference.
+3. Run the activation tool with the camera connected by USB, powered on, and your computer online — it contacts Canon and fails silently offline. Only one camera connected. It worked when **`Camera Control API` appears in the camera's Wi-Fi menu**. *Skip if your camera's guide already documents CCAPI.*
+4. `Wi-Fi settings` → `Camera Control API` → `Add connection` → `Add with wizard`, pick your access point, let it take an IP.
+5. Read the CCAPI top URL off the `[Wi-Fi on]` screen and put its host and port in `camera.base_url`.
+6. Enable `Auto connect` so the camera rejoins on power-on, and disable auto power-off while scanning.
 
-These steps happen on Canon's website and on the camera itself. They cannot be automated, and you only do them once.
-
-> **CCAPI connects over Wi-Fi or wired LAN — not USB.** The USB cable is used *only* for the one-time activation in step 4. Wired LAN needs an Ethernet port on the body or a WFT accessory; most enthusiast bodies (the R7 included) have neither, so Wi-Fi via your access point is the realistic setup.
-
-1. **Update your camera's firmware** to the latest version.
-2. **Register** with [Canon's Developer Community](https://developercommunity.usa.canon.com/) for your region and request CCAPI access. Approval is not instant.
-3. **Download** the CCAPI **activation tool** and the **API reference** from Canon.
-   ⚠️ Keep both *outside* this repository, or in `ccapi_reference/`, which is git-ignored. **Canon's licence forbids redistributing them** — never commit them, and never paste the reference into an issue or PR.
-4. **Run the activation tool** with the camera connected by USB and powered on. Your computer must be online — activation contacts Canon and fails silently offline. Only one camera may be connected. This is a one-time unlock, separate from the menu steps below.
-   You'll know it worked when **`Camera Control API` appears in the camera's Wi-Fi settings menu**.
-   *If your camera's Advanced User Guide already documents CCAPI, activation is not needed — skip to step 5.*
-5. **Connect over Wi-Fi:** `Wi-Fi settings` → `Camera Control API` → `Add connection` → `Add with wizard`, then pick your access point and let the camera take an IP automatically. Register a nickname if prompted.
-6. **Read the address off the camera.** The `[Wi-Fi on]` screen shows the SSID and the CCAPI top URL. Use its host and port for `camera.base_url`.
-7. **Enable `Auto connect`** in the Camera Control API menu so the camera rejoins on power-on. Worth doing for a fixed copy stand.
-8. **Disable auto power-off** while scanning. Bodies sleep aggressively, and a sleeping camera looks exactly like a network fault. (The app also disables this over the API on connect.)
-
-**Only one device can be connected to the camera at a time.** Quit Canon Camera Connect on your phone and any other tethering software, or this app cannot connect.
-
-### macOS notes
-
-**Grant Local Network permission, or nothing will connect.** macOS 15 and later gate access to devices on your LAN behind a per-app permission. The camera *is* such a device, so the first time you run the app your terminal will ask — say yes. If you miss the prompt or dismiss it, every call to the camera fails in a way that looks exactly like a network fault. Fix it in **System Settings → Privacy & Security → Local Network**, and tick whichever app you launch the server from (Terminal, iTerm, or your editor). Toggle it off and on again if it is already ticked but still failing.
-
-**The activation in step 4 may need a Windows machine.** Canon distributes the activation tool per region, and it is not necessarily offered as a macOS build. This is worth knowing but not worth worrying about: the unlock is written **to the camera**, not to the computer — that is why success shows up as a new entry in the camera's own Wi-Fi menu. So it does not matter which machine performs it. Borrow one once, and your Mac drives the camera from then on.
-
-**Accounts are optional.** If you register one under `Camera Control API` → `Account settings`, CCAPI requires HTTP digest authentication — set `camera.username` and `camera.password` in `config.yaml` to match. Leave both empty if you registered no account.
-
-Then point the app at it:
+**Only one device may be connected at a time** — quit Canon Camera Connect on your phone and any other tethering software.
 
 ```bash
 cp config.example.yaml config.yaml     # Windows: copy config.example.yaml config.yaml
+python -m csfs.tools.dump_endpoints    # verify
 ```
 
-Set `camera.base_url` to the address the camera showed. `config.yaml` is git-ignored because it contains your camera's IP — **never commit it**.
+`config.yaml` holds your camera's IP and is git-ignored. Never commit it.
 
-Verify:
+If you registered an account under `Camera Control API` → `Account settings`, CCAPI requires HTTP digest auth — set `camera.username` and `camera.password` to match. Leave empty if you didn't.
 
-```bash
-python -m csfs.tools.dump_endpoints
-```
+### macOS
 
-### If your camera names things differently
+**Grant Local Network permission or nothing connects.** macOS 15+ gates LAN access per app, and the camera is a LAN device. Say yes to the prompt on first run; if you miss it, every call fails looking exactly like a network fault. Fix in **System Settings → Privacy & Security → Local Network**, ticking whatever you launch the server from. Toggle it off and on if already ticked but still failing.
 
-This project never hardcodes CCAPI paths — it reads the endpoint inventory the camera itself publishes and matches it against hints in [`src/csfs/ccapi/endpoints.py`](src/csfs/ccapi/endpoints.py). That's the **only** file containing path assumptions. Canon's own reference recommends this approach, since the available URLs vary by model and firmware.
+**Activation may need a Windows machine** — Canon doesn't always ship a macOS build of the tool. It doesn't matter which computer does it: the unlock is written *to the camera*, which is why success shows up in the camera's own menu. Borrow one once.
 
-If `dump_endpoints` reports a capability as MISSING that your reference says your camera has, add the distinguishing path segment to the hints in that file. Everything else adapts automatically.
+### If your camera names endpoints differently
 
-Hints match on **whole path segments**, never loose substrings — a capability bound to the wrong endpoint fails in ways that are very hard to diagnose, so an honest MISSING is preferred.
+Nothing here hardcodes CCAPI paths. The app reads the endpoint inventory the camera publishes and matches it against hints in [`src/csfs/ccapi/endpoints.py`](src/csfs/ccapi/endpoints.py) — the only file with path assumptions, as Canon's own reference recommends, since URLs vary by model and firmware.
 
-Please don't paste Canon's reference text into issues or PRs. The path *your camera reports* is fine to share; Canon's documentation of it is not.
+If `dump_endpoints` reports a capability MISSING that your reference says you have, add the distinguishing path segment there. Hints match whole path segments, never loose substrings: a capability bound to the wrong endpoint fails in ways that are very hard to diagnose, so an honest MISSING is preferred.
 
----
-
-## Lens support
-
-- **Autofocus macro lens** — the app can drive focus in steps from the PC.
-- **Fully manual macro lens** — the app cannot turn the focus ring. You focus by hand, but while watching a large magnified live view, and you still get the remote shutter and everything else. The app detects this and hides the focus controls rather than offering buttons that do nothing.
+Share the path *your camera reports* if you file an issue; not Canon's documentation of it.
 
 ## Hardware
 
-- A CCAPI-capable Canon body (R7, R6 II, R10, R5, R6, RP, R3, 90D, 850D and others — check Canon's current list). The R7 is the reference camera, but the code targets the API, not the model.
-- A macro lens reaching ~1:1 for 35mm.
-- A copy stand, a negative holder, and a backlight — high-CRI if you shoot colour.
+- A CCAPI-capable Canon body — R7, R6 II, R10, R5, R6, RP, R3, 90D, 850D and others; check Canon's current list. The R7 is the reference, but the code targets the API, not the model.
+- A macro lens reaching ~1:1 for 35mm. Autofocus lenses can be driven from the PC; with a manual lens you focus by hand and keep everything else, and the focus controls hide themselves rather than offering dead buttons.
+- Copy stand, negative holder, backlight — high-CRI for colour.
 
----
-
-## Project layout
+## Layout
 
 ```
 src/csfs/
-├── config.py        Config loading: defaults → config.yaml → env vars
+├── config.py        Defaults -> config.yaml -> env vars
 ├── ccapi/           Thin CCAPI client. No image processing, no UI.
 │   ├── client.py        HTTP transport + error translation
 │   ├── discovery.py     Ask the camera what it supports
 │   ├── endpoints.py     The ONLY place path assumptions live
-│   ├── errors.py        Errors that name the real-world cause
 │   ├── liveview.py      Stream transports + frame parsers
 │   ├── shutter.py       Electronic shutter + settle delay
 │   ├── settings.py      Read/write settings by ability
 │   └── contents.py      List and download captures
-├── processing/      Pure functions over numpy arrays. No network, no UI.
-│   ├── invert.py        Negative → positive (v0.1: linear)
-│   ├── loupe.py         Magnified focus view
-│   └── codec.py         JPEG encode/decode
-├── app/             The local web server that wires it together
-│   ├── server.py        HTTP API + MJPEG preview
-│   ├── session.py       Camera session + live-view frame pump
-│   └── static/          The browser UI (no build step)
+├── processing/      Pure numpy. No network, no UI.
+├── app/             Local web server + browser UI, no build step
 ├── mock/            A fake camera, so development needs no hardware
-└── tools/           Setup and diagnostic commands
-tests/               Runs entirely without a camera
+└── tools/           dump_endpoints, check_liveview
+tests/               245 tests, none needing a camera
 ```
 
-The layering is load-bearing, not decoration: it's what lets you work on colour inversion with no camera attached, and what keeps the tests honest.
+The layering is load-bearing: it's what lets colour inversion be worked on with no camera attached.
 
 ## Contributing
 
-Forks and PRs welcome. Keep the three layers decoupled, and add tests for anything in `processing/`.
+Keep the three layers decoupled and add tests for anything in `processing/`.
 
-**Never commit:** Canon's CCAPI reference or activation files, camera IP addresses, `config.yaml`, or your own scans. The `.gitignore` covers all of these, but please check `git status` before committing anyway.
+**Never commit:** Canon's CCAPI reference or activation files, camera IP addresses, `config.yaml`, or your own scans. `.gitignore` covers these — check `git status` anyway.
 
-Got a camera model working? A short test report is a genuinely useful contribution.
+Got a camera model working? A short test report is genuinely useful.
 
 ## Licence
 
-[MIT](LICENSE) — covering **this project's code only**.
-
-Canon's CCAPI, its activation tool, and its reference documentation are Canon's property under separate terms. Nothing here grants you any rights to them; you obtain your own access from Canon.
+[MIT](LICENSE), covering **this project's code only**. Canon's CCAPI, activation tool and reference documentation are Canon's property under separate terms.

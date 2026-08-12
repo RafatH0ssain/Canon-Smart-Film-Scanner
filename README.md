@@ -38,9 +38,13 @@ pip install pyinstaller
 python packaging/build_app.py
 ```
 
-Output lands in `dist/`, around 150 MB — nearly all of it OpenCV. The build
-refuses to finish if Canon's reference material or your own `config.yaml`
-reach the output.
+Output lands in `dist/`, around **51 MB**. The build refuses to finish if
+Canon's reference material or your own `config.yaml` reach the output, or if it
+bundles a native library missing from
+[THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).
+
+Everything in it is permissively licensed — **no GPL or LGPL components** — so
+the binary is genuinely yours to hand out.
 
 macOS builds are unsigned, so Gatekeeper blocks them on any other Mac. Sharing
 one properly needs an Apple Developer ID and notarisation; locally, right-click
@@ -150,7 +154,7 @@ src/csfs/
 │   ├── shutter.py       Electronic shutter + settle delay
 │   ├── settings.py      Read/write settings by ability
 │   └── contents.py      List and download captures
-├── processing/      Pure numpy. No network, no UI.
+├── processing/      Pure numpy and Pillow. No network, no UI.
 ├── app/             Local web server + browser UI, no build step
 ├── mock/            A fake camera, so development needs no hardware
 ├── paths.py         Where things live, from a checkout and from a bundle

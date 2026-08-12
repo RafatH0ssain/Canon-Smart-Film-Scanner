@@ -20,10 +20,11 @@ datas = [
     (str(REPO / "src" / "csfs" / "app" / "static"), "csfs/app/static"),
     # Seeds the user's config on first launch, comments and all.
     (str(REPO / "config.example.yaml"), "."),
+    # Attribution for the native libraries this bundle carries.
+    (str(REPO / "THIRD-PARTY-NOTICES.md"), "."),
 ]
 
 hiddenimports = [
-    "cv2",
     "uvicorn.logging",
     "uvicorn.loops.auto",
     "uvicorn.protocols.http.auto",

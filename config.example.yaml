@@ -51,7 +51,9 @@ capture:
   prefer_electronic_shutter: true
 
   # Where downloaded captures are written. Relative paths resolve against the
-  # repository root. This directory is git-ignored.
+  # repository root from a checkout, and against
+  # Documents/Canon Smart Film Scanner from the packaged app -- which is also
+  # where that build keeps this file. Git-ignored either way.
   output_dir: "captures"
 
   # Delete the file from the camera's card after a verified download.

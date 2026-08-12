@@ -18,7 +18,35 @@ CCAPI controls the camera from outside and never modifies firmware, so it can't 
 
 **Expect roughly 4 fps at 960×640, or 11 fps at 640×424.** CCAPI has no USB transport and the link is the limit. If that's too slow to focus by, the sibling project **Canon EDSDK Film Scanner** does the same job over USB at ~60 fps — at the cost of a native SDK you must obtain from Canon, and a cable.
 
-## Try it with no camera
+## The app
+
+A packaged build runs by double-clicking — no Python, no terminal, no second
+process. On first launch it creates **Documents/Canon Smart Film Scanner/**,
+puts a commented `config.yaml` there, opens the UI in your browser, and starts
+the bundled mock camera so there is something to look at straight away.
+
+Nothing of Canon's is inside it — CCAPI is an HTTP API, so unlike the EDSDK
+sibling this app is genuinely redistributable. Pointing it at a real camera is
+still your side of the job: enter the address in that `config.yaml`, and enable
+CCAPI on the body first (see [Canon-side setup](#canon-side-setup)). The moment
+`camera.base_url` stops pointing at the mock, the mock stops starting.
+
+Build it yourself with:
+
+```bash
+pip install pyinstaller
+python packaging/build_app.py
+```
+
+Output lands in `dist/`, around 150 MB — nearly all of it OpenCV. The build
+refuses to finish if Canon's reference material or your own `config.yaml`
+reach the output.
+
+macOS builds are unsigned, so Gatekeeper blocks them on any other Mac. Sharing
+one properly needs an Apple Developer ID and notarisation; locally, right-click
+→ Open.
+
+## Try it from source, with no camera
 
 A mock camera serves synthetic negatives — orange mask, rebate, grain — over the same API a real body uses.
 
@@ -38,7 +66,7 @@ python -m csfs.app.server           # the other
 
 <http://127.0.0.1:8000>, press **Connect**. **Capture** downloads a full-resolution file to `captures/`.
 
-`pytest` runs 245 tests, which start their own mock and need nothing else running.
+`pytest` runs 256 tests, which start their own mock and need nothing else running.
 
 ### Controls
 
@@ -125,8 +153,10 @@ src/csfs/
 ├── processing/      Pure numpy. No network, no UI.
 ├── app/             Local web server + browser UI, no build step
 ├── mock/            A fake camera, so development needs no hardware
+├── paths.py         Where things live, from a checkout and from a bundle
 └── tools/           dump_endpoints, check_liveview
-tests/               245 tests, none needing a camera
+packaging/           PyInstaller build for the double-clickable app
+tests/               256 tests, none needing a camera
 ```
 
 The layering is load-bearing: it's what lets colour inversion be worked on with no camera attached.

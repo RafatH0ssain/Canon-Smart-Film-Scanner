@@ -14,6 +14,10 @@ from __future__ import annotations
 
 import argparse
 import logging
+import socket
+import threading
+import time
+import webbrowser
 from pathlib import Path
 from typing import Any, Literal
 from collections.abc import Iterator
@@ -26,7 +30,7 @@ from pydantic import BaseModel, Field
 from csfs.app.session import CaptureInProgressError, ScanSession
 from csfs.ccapi.errors import CCAPIError
 from csfs.config import Config, load_config
-from csfs.paths import static_dir
+from csfs.paths import example_config_path, is_frozen, static_dir, user_data_dir
 from csfs.processing.codec import DecodeError, decode_jpeg, encode_jpeg
 from csfs.processing.invert import invert_linear
 from csfs.processing.loupe import crop_zoom
@@ -392,6 +396,95 @@ def captures() -> dict[str, Any]:
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 
+def prepare_user_folder() -> Path | None:
+    """Create the user's folder and seed a config, on first launch of a bundle.
+
+    A packaged app has no repository to read a config out of and no console to
+    explain itself in. Both are solved by giving the person a real folder with
+    a real ``config.yaml`` in it, which is also where they will have to go to
+    enter their camera's address.
+
+    Returns the config path, or None when running from a checkout, where the
+    repository already is that folder.
+    """
+    if not is_frozen():
+        return None
+
+    folder = user_data_dir()
+    folder.mkdir(parents=True, exist_ok=True)
+    (folder / "captures").mkdir(exist_ok=True)
+
+    destination = folder / "config.yaml"
+    if not destination.is_file():
+        example = example_config_path()
+        if example.is_file():
+            # Copied, not written from defaults: the example carries the
+            # comments explaining every setting, which is the only
+            # documentation a double-click user is going to meet.
+            destination.write_text(example.read_text(encoding="utf-8"), encoding="utf-8")
+            logger.info("Created %s", destination)
+    return destination
+
+
+def _address_is_serving(host: str, port: int) -> bool:
+    """Whether something already answers on this address."""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+        probe.settimeout(0.25)
+        return probe.connect_ex((host, port)) == 0
+
+
+def start_mock_camera_if_wanted(config: Config) -> bool:
+    """Run the bundled mock camera in this process, when nothing real is set up.
+
+    Requiring a second terminal is fine from a checkout and useless in a
+    packaged app: a first launch would show a UI that cannot connect to
+    anything, which reads as broken rather than as unconfigured.
+
+    Only starts when ``camera.base_url`` still points at the mock's own
+    address, so pointing the app at a real camera silently stops it, and only
+    when nothing already answers there, so a mock started by hand is not
+    double-bound.
+    """
+    import uvicorn
+
+    from csfs.mock.mock_server import app as mock_app
+
+    expected = f"http://{config.mock.host}:{config.mock.port}"
+    if config.camera.base_url.rstrip("/") != expected:
+        return False
+    if _address_is_serving(config.mock.host, config.mock.port):
+        logger.info("Something already serves %s; not starting the bundled mock.", expected)
+        return False
+
+    server = uvicorn.Server(
+        uvicorn.Config(
+            mock_app, host=config.mock.host, port=config.mock.port, log_level="warning"
+        )
+    )
+    threading.Thread(target=server.run, name="csfs-mock", daemon=True).start()
+    logger.info("Bundled mock camera serving %s", expected)
+    return True
+
+
+def open_browser_when_ready(url: str, server: Any) -> None:
+    """Open the UI once the server is actually accepting connections.
+
+    Opening immediately races the bind and shows a connection error, which for
+    a double-clicked app looks exactly like the app being broken.
+    """
+
+    def wait_then_open() -> None:
+        deadline = time.perf_counter() + 20.0
+        while time.perf_counter() < deadline:
+            if getattr(server, "started", False):
+                webbrowser.open(url)
+                return
+            time.sleep(0.1)
+        logger.warning("Server did not start within 20 s; not opening a browser.")
+
+    threading.Thread(target=wait_then_open, name="csfs-browser", daemon=True).start()
+
+
 def main() -> None:
     """Entry point for ``python -m csfs.app.server``."""
     import uvicorn
@@ -400,19 +493,45 @@ def main() -> None:
     parser.add_argument("--host", default=None)
     parser.add_argument("--port", type=int, default=None)
     parser.add_argument("--config", default=None, help="Path to a config file.")
+    parser.add_argument(
+        "--browser",
+        dest="browser",
+        action="store_true",
+        default=None,
+        help="Open the UI in a browser once the server is up (default when packaged).",
+    )
+    parser.add_argument(
+        "--no-browser", dest="browser", action="store_false", help="Never open a browser."
+    )
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
 
+    prepare_user_folder()
     config = load_config(args.config)
     configure(config)
     host = args.host or config.server.host
     port = args.port or config.server.port
+    url = f"http://{host}:{port}"
 
-    print(f"\n  Canon Smart Film Scan -> http://{host}:{port}\n")
-    print(f"  Camera:  {config.camera.base_url}")
-    print(f"  Output:  {config.capture.resolved_output_dir()}\n")
-    uvicorn.run(app, host=host, port=port, log_level="info")
+    mock_running = start_mock_camera_if_wanted(config)
+
+    print(f"\n  Canon Smart Film Scan -> {url}\n")
+    print(f"  Camera:  {config.camera.base_url}" + ("  (bundled mock)" if mock_running else ""))
+    print(f"  Output:  {config.capture.resolved_output_dir()}")
+    if is_frozen():
+        print(f"  Settings: {user_data_dir() / 'config.yaml'}")
+    print()
+
+    server = uvicorn.Server(uvicorn.Config(app, host=host, port=port, log_level="info"))
+
+    # Packaged, the browser is the only UI there is, so open it unless told
+    # not to. From a checkout it stays off: restarting the server is something
+    # you do constantly, and a new tab each time is a nuisance.
+    if args.browser or (args.browser is None and is_frozen()):
+        open_browser_when_ready(url, server)
+
+    server.run()
 
 
 if __name__ == "__main__":

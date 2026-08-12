@@ -59,7 +59,7 @@ python3 -m venv .venv && source .venv/bin/activate    # Windows: .venv\Scripts\a
 pip install -r requirements.txt -e .
 ```
 
-Use Python **3.10–3.13**; `opencv-python` wheels lag newer releases. macOS ships 3.9, which is too old — `brew install python@3.12` and build the venv from `python3.12` explicitly.
+Use Python **3.10–3.13**; native wheels lag newer releases. macOS ships 3.9, which is too old — `brew install python@3.12` and build the venv from `python3.12` explicitly.
 
 Two terminals:
 

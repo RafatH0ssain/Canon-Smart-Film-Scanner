@@ -10,7 +10,11 @@ PyYAML>=6.0,<7             # config.yaml
 
 # --- Image processing -------------------------------------------------------
 numpy>=1.26,<3
-opencv-python>=4.10,<5     # cv2: JPEG decode/encode, inversion, peaking
+# Pillow for JPEG. Not OpenCV: its wheel bundles a GPL-licensed FFmpeg
+# (x264, x265, aribb24) plus a pile of video codecs this project never
+# calls -- all it was doing here was JPEG coding, a resize and a Scharr
+# gradient.
+Pillow>=10.0,<13
 
 # --- Local web UI + mock camera ---------------------------------------------
 fastapi>=0.115,<1

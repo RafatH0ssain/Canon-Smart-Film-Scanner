@@ -199,11 +199,12 @@ def _run(client: CCAPIClient, caps, args) -> int:
 
         print(f"\n  RESULT: {decoded}/{args.frames} frames decoded successfully.")
         if args.save and first is not None:
-            import cv2
+            from PIL import Image
 
             target = Path(args.save)
             target.parent.mkdir(parents=True, exist_ok=True)
-            cv2.imwrite(str(target), first)
+            # first is BGR, as everything in this layer is; the file wants RGB.
+            Image.fromarray(first[:, :, ::-1]).save(target)
             print(f"  first frame written to {target}")
         return 0
     finally:

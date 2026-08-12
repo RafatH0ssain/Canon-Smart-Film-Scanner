@@ -6,8 +6,10 @@ the live-view pipeline has exactly one place where compression settings live.
 
 from __future__ import annotations
 
-import cv2
+import io
+
 import numpy as np
+from PIL import Image
 
 # Quality for frames sent to the browser. High enough that the loupe is honest
 # about focus -- compression artefacts at low quality look a lot like grain,
@@ -29,11 +31,14 @@ def decode_jpeg(payload: bytes) -> np.ndarray:
     """
     if not payload:
         raise DecodeError("Empty payload.")
-    buffer = np.frombuffer(payload, dtype=np.uint8)
-    image = cv2.imdecode(buffer, cv2.IMREAD_COLOR)
-    if image is None:
-        raise DecodeError(f"Could not decode {len(payload)} bytes as an image.")
-    return image
+    try:
+        with Image.open(io.BytesIO(payload)) as image:
+            rgb = np.asarray(image.convert("RGB"))
+    except Exception as exc:  # Pillow raises several unrelated types
+        raise DecodeError(f"Could not decode {len(payload)} bytes as an image.") from exc
+    # BGR, because that is what the rest of this layer has always dealt in and
+    # what every downstream index assumes. Pillow hands back RGB.
+    return np.ascontiguousarray(rgb[:, :, ::-1])
 
 
 def encode_jpeg(frame: np.ndarray, quality: int = PREVIEW_JPEG_QUALITY) -> bytes:
@@ -42,7 +47,10 @@ def encode_jpeg(frame: np.ndarray, quality: int = PREVIEW_JPEG_QUALITY) -> bytes
     Raises:
         ValueError: If encoding fails.
     """
-    ok, buffer = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), int(quality)])
-    if not ok:
-        raise ValueError("JPEG encoding failed.")
-    return buffer.tobytes()
+    if frame.ndim == 3:
+        frame = frame[:, :, ::-1]  # BGR in, RGB for the encoder
+    buffer = io.BytesIO()
+    Image.fromarray(np.ascontiguousarray(frame)).save(
+        buffer, format="JPEG", quality=int(quality)
+    )
+    return buffer.getvalue()

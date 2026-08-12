@@ -8,8 +8,9 @@ expectations about CCAPI that the rest of the code relies on.
 
 from __future__ import annotations
 
-import cv2
 import numpy as np
+
+from support import decode_bgr, laplacian_variance
 import pytest
 import requests
 
@@ -18,7 +19,7 @@ from csfs.ccapi.endpoints import SHUTTER_MODE_PREFERENCE
 
 
 def _decode(payload: bytes) -> np.ndarray:
-    image = cv2.imdecode(np.frombuffer(payload, dtype=np.uint8), cv2.IMREAD_COLOR)
+    image = decode_bgr(payload)
     assert image is not None, "response was not a decodable JPEG"
     return image
 
@@ -235,8 +236,7 @@ def test_defocusing_reduces_measured_sharpness(client: CCAPIClient) -> None:
 
     def acutance() -> float:
         frame = _decode(client.get(caps.path("liveview_flip")).content)
-        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        return float(cv2.Laplacian(gray, cv2.CV_64F).var())
+        return laplacian_variance(frame)
 
     sharp = acutance()
     for _ in range(3):
@@ -253,8 +253,7 @@ def test_camera_zoom_reveals_detail_software_zoom_cannot(client: CCAPIClient) ->
 
     def acutance() -> float:
         frame = _decode(client.get(caps.path("liveview_flip")).content)
-        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        return float(cv2.Laplacian(gray, cv2.CV_64F).var())
+        return laplacian_variance(frame)
 
     at_1x = acutance()
     client.put(caps.path("lv_zoom"), json={"value": "10"})

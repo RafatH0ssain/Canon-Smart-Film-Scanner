@@ -7,6 +7,8 @@ not a direction plus a step count.
 from __future__ import annotations
 
 import pytest
+
+from support import decode_bgr, laplacian_variance
 import requests
 
 from csfs.ccapi import CCAPIClient, discover
@@ -78,13 +80,10 @@ def test_focus_drive_actually_changes_focus(client: CCAPIClient) -> None:
     client.post(caps.path("liveview"), json={"liveviewsize": "medium", "cameradisplay": "keep"})
     controller = FocusController(client, caps)
 
-    import cv2
-    import numpy as np
-
     def acutance() -> float:
         payload = client.get(caps.path("liveview_flip")).content
-        frame = cv2.imdecode(np.frombuffer(payload, np.uint8), cv2.IMREAD_COLOR)
-        return float(cv2.Laplacian(cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY), cv2.CV_64F).var())
+        frame = decode_bgr(payload)
+        return laplacian_variance(frame)
 
     sharp = acutance()
     for _ in range(3):

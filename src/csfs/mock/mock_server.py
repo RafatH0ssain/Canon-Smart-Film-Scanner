@@ -26,8 +26,9 @@ from dataclasses import dataclass, field
 from typing import Any
 from collections.abc import AsyncIterator
 
-import cv2
 import numpy as np
+
+from csfs.processing.codec import encode_jpeg
 from fastapi import APIRouter, FastAPI, HTTPException, Request, Response
 from fastapi.responses import JSONResponse, StreamingResponse
 
@@ -141,10 +142,12 @@ modern_router = APIRouter()
 
 def _encode_jpeg(frame: np.ndarray, quality: int = 85) -> bytes:
     """Encode a BGR array as JPEG bytes."""
-    ok, buffer = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), quality])
-    if not ok:
-        raise HTTPException(status_code=500, detail="Mock camera failed to encode a frame.")
-    return buffer.tobytes()
+    try:
+        return encode_jpeg(frame, quality=quality)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500, detail="Mock camera failed to encode a frame."
+        ) from exc
 
 
 def _version_prefix(request: Request) -> str:

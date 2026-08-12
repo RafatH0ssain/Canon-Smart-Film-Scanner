@@ -10,8 +10,8 @@ instead for real sensor detail; the two compose.
 
 from __future__ import annotations
 
-import cv2
 import numpy as np
+from PIL import Image
 
 
 def crop_zoom(
@@ -68,5 +68,6 @@ def _resize(frame: np.ndarray, width: int, height: int) -> np.ndarray:
     if frame.shape[1] == width and frame.shape[0] == height:
         return frame.copy()
     enlarging = width > frame.shape[1] or height > frame.shape[0]
-    interpolation = cv2.INTER_NEAREST if enlarging else cv2.INTER_AREA
-    return cv2.resize(frame, (width, height), interpolation=interpolation)
+    resample = Image.Resampling.NEAREST if enlarging else Image.Resampling.BOX
+    image = Image.fromarray(np.ascontiguousarray(frame))
+    return np.asarray(image.resize((width, height), resample=resample))

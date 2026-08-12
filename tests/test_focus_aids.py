@@ -6,8 +6,9 @@ are for -- distinguishing sharp from soft -- rather than about pixels.
 
 from __future__ import annotations
 
-import cv2
 import numpy as np
+
+from support import gaussian_blur
 import pytest
 
 from csfs.mock.frames import make_negative
@@ -167,7 +168,7 @@ def test_region_sharpness_follows_the_region() -> None:
     frame = np.zeros((200, 400, 3), dtype=np.uint8)
     noise = np.random.default_rng(0).integers(0, 255, (200, 200, 3), dtype=np.uint8)
     frame[:, :200] = noise                       # busy, high-frequency
-    frame[:, 200:] = cv2.GaussianBlur(noise, (21, 21), 0)  # smooth
+    frame[:, 200:] = gaussian_blur(noise, 21)  # smooth
 
     left = sharpness_of_region(frame, center_x=0.25, center_y=0.5, size=0.3)
     right = sharpness_of_region(frame, center_x=0.75, center_y=0.5, size=0.3)
@@ -206,7 +207,7 @@ def test_corner_sharpness_detects_a_tilted_plane() -> None:
     rng = np.random.default_rng(3)
     frame = rng.integers(0, 255, (300, 400, 3), dtype=np.uint8)
     # Blur the right-hand side only, as a tilted film plane would.
-    frame[:, 200:] = cv2.GaussianBlur(frame[:, 200:], (15, 15), 0)
+    frame[:, 200:] = gaussian_blur(frame[:, 200:], 15)
 
     corners = corner_sharpness(frame)
     assert corners["top_left"] > corners["top_right"]

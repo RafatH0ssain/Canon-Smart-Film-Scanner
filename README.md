@@ -33,17 +33,40 @@ All processing happens on the computer. For film scanning that is exactly what y
 
 You do not need a camera, or CCAPI access, to run this project. A **mock camera** serves synthetic film negatives — complete with an orange mask and a film rebate — over the same API a real body uses.
 
+**macOS / Linux:**
+
 ```bash
 git clone <your-fork-url>
 cd "Canon Smart Film Scanner"
 
-python -m venv .venv
-# Windows:        .venv\Scripts\activate
-# macOS / Linux:  source .venv/bin/activate
+python3 -m venv .venv
+source .venv/bin/activate
 
 pip install -r requirements.txt
 pip install -e .
 ```
+
+**Windows:**
+
+```bat
+git clone <your-fork-url>
+cd "Canon Smart Film Scanner"
+
+python -m venv .venv
+.venv\Scripts\activate
+
+pip install -r requirements.txt
+pip install -e .
+```
+
+> **On macOS, use `python3`, not `python`** — there is no `python` command on a stock system. Check what you have with `python3 -V` first: macOS ships **3.9**, which is *older than this project needs*. Install a supported one with [Homebrew](https://brew.sh) and build the venv from it explicitly:
+>
+> ```bash
+> brew install python@3.12
+> python3.12 -m venv .venv
+> ```
+>
+> Every command below assumes the venv is activated — your prompt shows `(.venv)`. Inside it, plain `python` works on every platform.
 
 Start the mock camera in one terminal:
 
@@ -125,6 +148,12 @@ These steps happen on Canon's website and on the camera itself. They cannot be a
 8. **Disable auto power-off** while scanning. Bodies sleep aggressively, and a sleeping camera looks exactly like a network fault. (The app also disables this over the API on connect.)
 
 **Only one device can be connected to the camera at a time.** Quit Canon Camera Connect on your phone and any other tethering software, or this app cannot connect.
+
+### macOS notes
+
+**Grant Local Network permission, or nothing will connect.** macOS 15 and later gate access to devices on your LAN behind a per-app permission. The camera *is* such a device, so the first time you run the app your terminal will ask — say yes. If you miss the prompt or dismiss it, every call to the camera fails in a way that looks exactly like a network fault. Fix it in **System Settings → Privacy & Security → Local Network**, and tick whichever app you launch the server from (Terminal, iTerm, or your editor). Toggle it off and on again if it is already ticked but still failing.
+
+**The activation in step 4 may need a Windows machine.** Canon distributes the activation tool per region, and it is not necessarily offered as a macOS build. This is worth knowing but not worth worrying about: the unlock is written **to the camera**, not to the computer — that is why success shows up as a new entry in the camera's own Wi-Fi menu. So it does not matter which machine performs it. Borrow one once, and your Mac drives the camera from then on.
 
 **Accounts are optional.** If you register one under `Camera Control API` → `Account settings`, CCAPI requires HTTP digest authentication — set `camera.username` and `camera.password` in `config.yaml` to match. Leave both empty if you registered no account.
 

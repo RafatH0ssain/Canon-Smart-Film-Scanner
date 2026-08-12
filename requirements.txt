@@ -1,7 +1,8 @@
 # Canon Smart Film Scan -- runtime + dev dependencies
 #
 # Deliberately small and mainstream. If you are adding a dependency, ask
-# whether a newcomer on Windows can `pip install` it without a compiler.
+# whether a newcomer on Windows, macOS (Intel and Apple silicon) or Linux can
+# `pip install` it without a compiler.
 
 # --- CCAPI client -----------------------------------------------------------
 requests>=2.32,<3          # control calls + streaming live view

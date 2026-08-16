@@ -8,138 +8,271 @@
 </head>
 <body>
   <header>
-    <h1>Canon Smart Film Scan</h1>
+    <div class="brand">
+      <svg class="mark" viewBox="0 0 20 20" aria-hidden="true">
+        <rect x="1.4" y="4.6" width="17.2" height="12" rx="3.2"/>
+        <circle cx="10" cy="10.6" r="3.6"/>
+        <path d="M6.6 4.6l1.1-2h4.6l1.1 2"/>
+      </svg>
+      <h1>Smart Film Scan</h1>
+    </div>
+
+    <div class="camera-meta" id="lens-meta" data-idle="yes">
+      <span id="lens-name">&mdash;</span>
+    </div>
+
     <div class="status" id="status-chip" data-state="off">Disconnected</div>
-    <button id="connect" class="primary">Connect</button>
+    <button id="connect" class="btn primary">Connect</button>
   </header>
 
   <main>
     <section class="viewer" id="viewer">
       <img id="preview" alt="Live view from the camera" hidden>
+
       <div class="placeholder" id="placeholder">
-        <p>Not connected.</p>
-        <p class="hint">Start the mock camera with
-          <code>python -m csfs.mock.mock_server</code>, or point
-          <code>camera.base_url</code> at your camera, then press Connect.</p>
+        <svg class="placeholder-mark" viewBox="0 0 48 48" aria-hidden="true">
+          <rect x="4" y="11" width="40" height="28" rx="6"/>
+          <circle cx="24" cy="25" r="8"/>
+        </svg>
+        <p class="placeholder-title">Not connected</p>
+        <p class="hint">
+          Start the mock camera with <code>python -m csfs.mock.mock_server</code>,
+          or point <code>camera.base_url</code> at your camera, then press
+          Connect.
+        </p>
       </div>
+
+      <!-- Floating over the image: corner readings are a question about the
+           picture, and belong on top of it rather than in a list beside it. -->
+      <div class="hud" id="sharpness-block" hidden>
+        <div class="hud-head">Sharpness</div>
+        <div class="meter"><div class="meter-fill" id="sharpness-bar"></div></div>
+        <div class="hud-row"><span>Now</span><b id="sharpness-now">&mdash;</b></div>
+        <div class="hud-row"><span>Best</span><b id="sharpness-best">&mdash;</b></div>
+        <dl class="corners" id="corners"></dl>
+        <button id="sharpness-reset" class="hud-btn">Reset best</button>
+      </div>
+
       <div class="loupe-hint" id="loupe-hint" hidden>Click the image to move the loupe</div>
+
+      <div class="toolbar">
+        <div class="tb-group">
+          <label class="pill" title="Invert to positive — I">
+            <input type="checkbox" id="invert" checked>
+            <svg viewBox="0 0 16 16" aria-hidden="true">
+              <circle cx="8" cy="8" r="6"/>
+              <path d="M8 2a6 6 0 000 12z" fill="currentColor" stroke="none"/>
+            </svg>
+            <span>Invert</span>
+          </label>
+
+          <label class="pill" title="Magnified loupe — L">
+            <input type="checkbox" id="loupe">
+            <svg viewBox="0 0 16 16" aria-hidden="true">
+              <circle cx="7" cy="7" r="4.6"/>
+              <path d="M10.4 10.4L14 14"/>
+            </svg>
+            <span>Loupe</span>
+          </label>
+
+          <label class="pill" title="Focus peaking — P">
+            <input type="checkbox" id="peaking">
+            <svg viewBox="0 0 16 16" aria-hidden="true">
+              <path d="M6 1.5l1.2 3.3L10.5 6 7.2 7.2 6 10.5 4.8 7.2 1.5 6l3.3-1.2z"/>
+              <path d="M11.6 8.8l.7 1.9 1.9.7-1.9.7-.7 1.9-.7-1.9-1.9-.7 1.9-.7z"/>
+            </svg>
+            <span>Peaking</span>
+          </label>
+
+          <!-- An action, not a toggle: sharpness here is measured on demand. -->
+          <button id="measure" class="pill action" title="Measure the loupe region — M" disabled>
+            <svg viewBox="0 0 16 16" aria-hidden="true">
+              <path d="M2 11a6 6 0 1112 0"/>
+              <path d="M8 11L11 6.5"/>
+            </svg>
+            <span>Measure</span>
+          </button>
+        </div>
+
+        <div class="tb-group focus-grid" id="focus-controls" hidden>
+          <button data-dir="near" data-size="coarse" title="Near, large step" aria-label="Focus near, large step">
+            <svg viewBox="0 0 20 16" aria-hidden="true"><path d="M8.5 3.5L5 8l3.5 4.5M13 3.5L9.5 8l3.5 4.5M18 3.5L14.5 8l3.5 4.5"/></svg>
+          </button>
+          <button data-dir="near" data-size="medium" title="Near, medium step" aria-label="Focus near, medium step">
+            <svg viewBox="0 0 20 16" aria-hidden="true"><path d="M11 3.5L7.5 8l3.5 4.5M15.5 3.5L12 8l3.5 4.5"/></svg>
+          </button>
+          <button data-dir="near" data-size="fine" title="Near, small step" aria-label="Focus near, small step">
+            <svg viewBox="0 0 20 16" aria-hidden="true"><path d="M13 3.5L9.5 8l3.5 4.5"/></svg>
+          </button>
+          <button data-dir="far" data-size="fine" title="Far, small step" aria-label="Focus far, small step">
+            <svg viewBox="0 0 20 16" aria-hidden="true"><path d="M7 3.5L10.5 8 7 12.5"/></svg>
+          </button>
+          <button data-dir="far" data-size="medium" title="Far, medium step" aria-label="Focus far, medium step">
+            <svg viewBox="0 0 20 16" aria-hidden="true"><path d="M4.5 3.5L8 8l-3.5 4.5M9 3.5L12.5 8 9 12.5"/></svg>
+          </button>
+          <button data-dir="far" data-size="coarse" title="Far, large step" aria-label="Focus far, large step">
+            <svg viewBox="0 0 20 16" aria-hidden="true"><path d="M2 3.5L5.5 8 2 12.5M6.5 3.5L10 8l-3.5 4.5M11 3.5L14.5 8 11 12.5"/></svg>
+          </button>
+        </div>
+
+        <div class="tb-group">
+          <button id="capture" class="btn primary capture" disabled>
+            Capture <kbd>Space</kbd>
+          </button>
+        </div>
+      </div>
     </section>
 
     <aside class="panel">
-      <div class="group">
-        <h2>Preview</h2>
-        <label class="row">
-          <input type="checkbox" id="invert" checked>
-          <span>Invert to positive</span>
-        </label>
-        <p class="note" id="invert-note">
-          v0.1 uses a plain linear inversion. Good for black &amp; white;
-          colour negatives will look cyan until the proper colour pipeline lands
-          in v0.3.
-        </p>
-      </div>
-
-      <div class="group">
-        <h2>Focus aids</h2>
-        <label class="row">
-          <input type="checkbox" id="loupe">
-          <span>Magnified loupe <kbd>L</kbd></span>
-        </label>
-        <label class="row stacked">
-          <span>Software zoom <output id="zoom-value">4.0&times;</output></span>
-          <input type="range" id="zoom" min="1" max="12" step="0.5" value="4">
-        </label>
-
-        <label class="row">
-          <input type="checkbox" id="peaking">
-          <span>Focus peaking <kbd>P</kbd></span>
-        </label>
-        <label class="row stacked">
-          <span>Sensitivity <output id="peaking-value">50%</output></span>
-          <input type="range" id="peaking-sensitivity" min="0" max="1" step="0.05" value="0.5">
-        </label>
-        <p class="note">
-          Sharp edges are marked red. Works in autofocus mode, unlike the
-          camera's own peaking &mdash; so you can drive focus and see peaking
-          at the same time.
-        </p>
-
-        <div id="camera-zoom-block" hidden>
-          <label class="row stacked">
-            <span>Camera zoom</span>
-            <div class="segmented" id="camera-zoom">
-              <button data-value="1" class="active">1&times;</button>
-              <button data-value="5">5&times;</button>
-              <button data-value="10">10&times;</button>
-            </div>
-          </label>
+      <details class="section" open>
+        <summary>
+          <svg class="chevron" viewBox="0 0 12 12" aria-hidden="true"><path d="M4.5 2.5L8 6l-3.5 3.5"/></svg>
+          Image
+        </summary>
+        <div class="section-body">
+          <p class="note warn" id="invert-note">
+            v0.1 uses a plain linear inversion. Good for black &amp; white;
+            colour negatives will look cyan until the proper colour pipeline
+            lands in v0.3.
+          </p>
+          <details class="about">
+            <summary>What this does and does not touch</summary>
+            <p>
+              Inversion is preview-only. The file the camera writes is never
+              modified, so a cyan preview costs you nothing but the judgement
+              you make from it.
+            </p>
+          </details>
         </div>
-      </div>
+      </details>
 
-      <div class="group">
-        <h2>Focus drive</h2>
-        <div id="focus-controls" hidden>
-          <p class="note" id="lens-name">&mdash;</p>
-          <div class="focus-grid">
-            <button data-dir="near" data-size="coarse" title="Near, large step">&laquo;&laquo;</button>
-            <button data-dir="near" data-size="medium" title="Near, medium step">&laquo;</button>
-            <button data-dir="near" data-size="fine" title="Near, small step">&lsaquo;</button>
-            <button data-dir="far" data-size="fine" title="Far, small step">&rsaquo;</button>
-            <button data-dir="far" data-size="medium" title="Far, medium step">&raquo;</button>
-            <button data-dir="far" data-size="coarse" title="Far, large step">&raquo;&raquo;</button>
+      <details class="section" open>
+        <summary>
+          <svg class="chevron" viewBox="0 0 12 12" aria-hidden="true"><path d="M4.5 2.5L8 6l-3.5 3.5"/></svg>
+          Focus
+        </summary>
+        <div class="section-body">
+          <div class="field">
+            <span class="field-label">Loupe zoom <output id="zoom-value">4.0&times;</output></span>
+            <input type="range" id="zoom" min="1" max="12" step="0.5" value="4">
           </div>
-          <p class="note">
-            <kbd>&larr;</kbd><kbd>&rarr;</kbd> fine &middot;
-            <kbd>Shift</kbd> medium &middot; <kbd>Alt</kbd> coarse
-          </p>
-        </div>
-        <div id="focus-unavailable" class="warn" hidden>
-          <p id="focus-reason"></p>
-          <button id="focus-recheck">Check again</button>
-        </div>
-      </div>
+          <details class="about">
+            <summary>About the loupe</summary>
+            <p>
+              Click anywhere on the image to move the loupe. This enlarges pixels
+              the camera already discarded when it downscaled the live-view
+              stream, so it magnifies what you have rather than revealing more.
+            </p>
+          </details>
 
-      <div class="group">
-        <h2>Sharpness</h2>
-        <button id="measure" disabled>Measure loupe region</button>
-        <div id="sharpness-block" hidden>
-          <div class="meter"><div class="meter-fill" id="sharpness-bar"></div></div>
+          <div id="camera-zoom-block" hidden>
+            <div class="field">
+              <span class="field-label">Camera zoom</span>
+              <div class="segmented" id="camera-zoom">
+                <button data-value="1" class="active">1&times;</button>
+                <button data-value="5">5&times;</button>
+                <button data-value="10">10&times;</button>
+              </div>
+            </div>
+            <details class="about">
+              <summary>Camera zoom versus the loupe</summary>
+              <p>
+                This one is real magnification: the camera crops the sensor and
+                sends those pixels instead, so 5&times; and 10&times; show
+                detail the loupe cannot. Only offered when the body supports it.
+              </p>
+            </details>
+          </div>
+
+          <div class="field">
+            <span class="field-label">Peaking sensitivity <output id="peaking-value">50%</output></span>
+            <input type="range" id="peaking-sensitivity" min="0" max="1" step="0.05" value="0.5">
+          </div>
+          <details class="about">
+            <summary>About peaking</summary>
+            <p>
+              Sharp edges are marked red. Works in autofocus mode, unlike the
+              camera's own peaking &mdash; so you can drive focus and see
+              peaking at the same time.
+            </p>
+          </details>
+
+          <div class="keyline">
+            <span class="field-label">Focus drive</span>
+            <p class="note keys">
+              <kbd>&larr;</kbd><kbd>&rarr;</kbd> fine &middot;
+              <kbd>Shift</kbd> medium &middot; <kbd>Alt</kbd> coarse
+            </p>
+            <div id="focus-unavailable" class="note warn" hidden>
+              <p id="focus-reason"></p>
+              <button id="focus-recheck" class="btn">Check again</button>
+            </div>
+          </div>
+
+          <details class="about">
+            <summary>About the sharpness readout</summary>
+            <p>
+              Press <strong>Measure</strong> in the toolbar (or <kbd>M</kbd>) and
+              the reading appears over the picture. Relative only &mdash; turn
+              focus and watch it peak. The four corner values are laid out where
+              those corners are: read them together, and a film plane that is not
+              parallel to the sensor shows up as one corner lagging the rest.
+            </p>
+          </details>
+        </div>
+      </details>
+
+      <details class="section" open>
+        <summary>
+          <svg class="chevron" viewBox="0 0 12 12" aria-hidden="true"><path d="M4.5 2.5L8 6l-3.5 3.5"/></svg>
+          Capture
+        </summary>
+        <div class="section-body">
           <dl class="facts">
-            <dt>Now</dt><dd id="sharpness-now">&mdash;</dd>
-            <dt>Best</dt><dd id="sharpness-best">&mdash;</dd>
+            <dt>Settle delay</dt><dd id="settle">&mdash;</dd>
+            <dt>Shutter</dt><dd id="shutter-mode">&mdash;</dd>
+            <dt>Saving to</dt><dd id="output-dir" class="path">&mdash;</dd>
           </dl>
-          <p class="note">
-            Relative only &mdash; turn focus and watch it peak. Corner values
-            reveal whether the film plane is parallel to the sensor.
-          </p>
-          <dl class="facts" id="corners"></dl>
-          <button id="sharpness-reset">Reset best</button>
+          <div id="capture-status" class="capture-status" hidden></div>
+          <details class="about">
+            <summary>Why a capture takes a while</summary>
+            <p>
+              Most of it is the download: tens of megabytes over Wi-Fi, not the
+              shutter. The status line reports which stage it is in and how long
+              it has been going, so slow-but-healthy does not read as a hang.
+            </p>
+          </details>
         </div>
-      </div>
+      </details>
 
-      <div class="group">
-        <h2>Capture</h2>
-        <button id="capture" class="primary big" disabled>
-          Capture <kbd>Space</kbd>
-        </button>
-        <dl class="facts">
-          <dt>Settle delay</dt><dd id="settle">&mdash;</dd>
-          <dt>Shutter</dt><dd id="shutter-mode">&mdash;</dd>
-          <dt>Saving to</dt><dd id="output-dir" class="path">&mdash;</dd>
-        </dl>
-        <div id="capture-status" class="capture-status" hidden></div>
-      </div>
+      <details class="section" open>
+        <summary>
+          <svg class="chevron" viewBox="0 0 12 12" aria-hidden="true"><path d="M4.5 2.5L8 6l-3.5 3.5"/></svg>
+          Camera
+        </summary>
+        <div class="section-body">
+          <div id="settings-controls"></div>
+          <p class="note warn" id="prepared-note" hidden></p>
+          <details class="about">
+            <summary>About these controls</summary>
+            <p>
+              Read from the camera and written straight back to it. A setting the
+              body will not accept right now &mdash; aperture in a mode that owns
+              it, say &mdash; is shown but not selectable.
+            </p>
+          </details>
+        </div>
+      </details>
 
-      <div class="group">
-        <h2>Camera settings</h2>
-        <div id="settings-controls"></div>
-        <p class="note" id="prepared-note" hidden></p>
-      </div>
-
-      <div class="group">
-        <h2>Downloaded</h2>
-        <ul class="captures" id="captures"><li class="empty">Nothing yet.</li></ul>
-      </div>
+      <details class="section" open>
+        <summary>
+          <svg class="chevron" viewBox="0 0 12 12" aria-hidden="true"><path d="M4.5 2.5L8 6l-3.5 3.5"/></svg>
+          Downloaded
+        </summary>
+        <div class="section-body">
+          <ul class="captures" id="captures"><li class="empty">Nothing yet.</li></ul>
+        </div>
+      </details>
     </aside>
   </main>
 

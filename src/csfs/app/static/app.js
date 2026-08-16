@@ -30,6 +30,7 @@ const el = {
   sharpnessBest: $("sharpness-best"),
   sharpnessReset: $("sharpness-reset"),
   corners: $("corners"),
+  lensMeta: $("lens-meta"),
   settingsControls: $("settings-controls"),
   preparedNote: $("prepared-note"),
   capture: $("capture"),
@@ -40,6 +41,39 @@ const el = {
   captures: $("captures"),
   toast: $("toast"),
 };
+
+/* ---------- presentation helpers ----------
+ *
+ * None of this talks to the camera. It keeps CSS in step with state the
+ * stylesheet has no way to read for itself. Mirrors the EDSDK sibling.
+ */
+
+// A slider's filled portion. CSS cannot see an input's value, so the position
+// is handed over as a percentage the track's gradient stops at.
+const ranges = [...document.querySelectorAll('input[type="range"]')];
+
+function paintRange(input) {
+  const min = Number(input.min || 0);
+  const max = Number(input.max || 100);
+  const span = max - min;
+  const pct = span > 0 ? ((Number(input.value) - min) / span) * 100 : 0;
+  input.style.setProperty("--range-fill", `${Math.min(100, Math.max(0, pct))}%`);
+}
+
+function paintRanges() { ranges.forEach(paintRange); }
+
+ranges.forEach((input) => input.addEventListener("input", () => paintRange(input)));
+
+// Keyboard shortcuts are pressed dozens of times a session. Animating what
+// they toggle makes the app feel slower than it is, so the transition is
+// suppressed for that one flip and restored once it has landed.
+function toggleInstantly(input) {
+  input.dataset.instant = "";
+  input.checked = !input.checked;
+  requestAnimationFrame(() =>
+    requestAnimationFrame(() => delete input.dataset.instant)
+  );
+}
 
 let connected = false;
 let capturing = false;
@@ -101,6 +135,7 @@ function render(state) {
 
   el.preview.hidden = !state.streaming;
   el.placeholder.hidden = state.streaming;
+
   el.loupeHint.hidden = !state.streaming || !state.preview.loupe;
 
   if (state.stream_error) toast(state.stream_error);
@@ -122,6 +157,7 @@ function render(state) {
     `${Math.round(state.preview.peaking_sensitivity * 100)}%`;
 
   el.measure.disabled = !state.streaming;
+  paintRanges();
   renderFocus(state.focus);
   renderSettings(state.settings ?? {});
   renderPrepared(state.prepared ?? {});
@@ -131,11 +167,13 @@ function renderFocus(focus) {
   if (!focus) {
     el.focusControls.hidden = true;
     el.focusUnavailable.hidden = true;
+    el.lensMeta.dataset.idle = "yes";
     return;
   }
   el.focusControls.hidden = !focus.available;
   el.focusUnavailable.hidden = focus.available;
   el.lensName.textContent = focus.lens;
+  el.lensMeta.dataset.idle = focus.lens ? "no" : "yes";
   if (!focus.available) el.focusReason.textContent = focus.reason ?? "";
 }
 
@@ -334,7 +372,9 @@ function renderSharpness(data) {
   el.sharpnessBar.style.width = `${ratio * 100}%`;
 
   el.corners.innerHTML = Object.entries(data.corners)
-    .map(([k, v]) => `<dt>${k.replace(/_/g, " ")}</dt><dd>${v.toFixed(0)}</dd>`)
+    .map(([k, v]) =>
+      `<dt data-corner="${k}">${k.replace(/_/g, " ")}</dt>` +
+      `<dd data-corner="${k}">${v.toFixed(0)}</dd>`)
     .join("");
 }
 
@@ -386,13 +426,13 @@ document.addEventListener("keydown", (event) => {
     event.preventDefault();   // stop Space scrolling the page
     capture();
   } else if (event.key === "i") {
-    el.invert.checked = !el.invert.checked;
+    toggleInstantly(el.invert);
     setPreview({ invert: el.invert.checked });
   } else if (event.key === "l") {
-    el.loupe.checked = !el.loupe.checked;
+    toggleInstantly(el.loupe);
     setPreview({ loupe: el.loupe.checked });
   } else if (event.key === "p") {
-    el.peaking.checked = !el.peaking.checked;
+    toggleInstantly(el.peaking);
     setPreview({ peaking: el.peaking.checked });
   } else if (event.key === "m") {
     measureSharpness();

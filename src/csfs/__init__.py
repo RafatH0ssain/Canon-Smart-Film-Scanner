@@ -8,4 +8,4 @@ The layering is what keeps this testable without a camera attached:
     csfs.mock        A fake CCAPI camera, so development needs no hardware.
 """
 
-__version__ = "0.1.0.dev0"
+__version__ = "1.1.0"

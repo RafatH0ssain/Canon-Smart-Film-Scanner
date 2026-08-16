@@ -270,12 +270,25 @@ el.zoom.addEventListener("change", () =>
 
 // Click the preview to move the loupe to that point.
 el.preview.addEventListener("click", (event) => {
+  // Allow for object-fit: contain letterboxing. The element fills the viewer
+  // but the picture only fills part of it, so measuring against the element's
+  // box sends the loupe somewhere other than where you clicked -- worse the
+  // further the window's shape is from the stream's 3:2.
   const box = el.preview.getBoundingClientRect();
-  setPreview({
-    loupe: true,
-    loupe_x: (event.clientX - box.left) / box.width,
-    loupe_y: (event.clientY - box.top) / box.height,
-  });
+  const natural = el.preview.naturalWidth / el.preview.naturalHeight;
+  const shown = box.width / box.height;
+  let w = box.width, h = box.height, offX = 0, offY = 0;
+  if (natural > shown) {
+    h = box.width / natural;
+    offY = (box.height - h) / 2;
+  } else {
+    w = box.height * natural;
+    offX = (box.width - w) / 2;
+  }
+  const x = (event.clientX - box.left - offX) / w;
+  const y = (event.clientY - box.top - offY) / h;
+  if (x < 0 || x > 1 || y < 0 || y > 1) return;   // a click on the black bars
+  setPreview({ loupe: true, loupe_x: x, loupe_y: y });
 });
 
 el.cameraZoom.addEventListener("click", async (event) => {

@@ -136,6 +136,15 @@ function render(state) {
   el.preview.hidden = !state.streaming;
   el.placeholder.hidden = state.streaming;
 
+  // Attach here rather than only on the Connect click, or a page reload while
+  // the camera is already streaming leaves the viewer empty until you
+  // disconnect and reconnect. Cache-buster: without it a reconnect can rebind
+  // to the closed stream.
+  if (state.streaming && !el.preview.src) {
+    el.preview.src = `/stream.mjpg?t=${Date.now()}`;
+  } else if (!state.streaming) {
+    el.preview.removeAttribute("src");
+  }
   el.loupeHint.hidden = !state.streaming || !state.preview.loupe;
 
   if (state.stream_error) toast(state.stream_error);
@@ -237,13 +246,9 @@ el.connect.addEventListener("click", async () => {
   el.connect.disabled = true;
   try {
     const state = await post(connected ? "/api/disconnect" : "/api/connect");
+    // Drop any dead stream before rendering; render re-attaches a fresh one.
+    el.preview.removeAttribute("src");
     render(state);
-    if (state.streaming) {
-      // Cache-bust so a reconnect does not reuse the previous dead stream.
-      el.preview.src = `/stream.mjpg?t=${Date.now()}`;
-    } else {
-      el.preview.removeAttribute("src");
-    }
   } catch (err) {
     toast(err.message);
   } finally {

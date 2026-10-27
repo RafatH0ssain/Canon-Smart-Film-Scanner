@@ -76,7 +76,7 @@ python -m csfs.app.server           # the other
 
 <http://127.0.0.1:8000>, press **Connect**. **Capture** downloads a full-resolution file to `captures/`.
 
-`pytest` runs 256 tests, which start their own mock and need nothing else running.
+`pytest` runs ≈250 tests, which start their own mock and need nothing else running.
 
 ### Controls
 
@@ -166,7 +166,7 @@ src/csfs/
 ├── paths.py         Where things live, from a checkout and from a bundle
 └── tools/           dump_endpoints, check_liveview
 packaging/           PyInstaller build for the double-clickable app
-tests/               256 tests, none needing a camera
+tests/               ≈250 tests, none needing a camera
 ```
 
 The layering is load-bearing: it's what lets colour inversion be worked on with no camera attached.

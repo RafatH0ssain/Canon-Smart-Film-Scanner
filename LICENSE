@@ -19,14 +19,3 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
-
----
-
-NOTE ON SCOPE
-
-This license covers the source code of Canon Smart Film Scan only.
-
-Canon's Camera Control API (CCAPI), its activation tool, and its reference
-documentation are Canon's property and carry their own separate license terms.
-Nothing in this repository grants you any rights to them. Each user must obtain
-their own CCAPI access directly from Canon's Developer Community.

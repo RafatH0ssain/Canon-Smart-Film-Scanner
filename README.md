@@ -6,7 +6,7 @@ Scan film negatives with a Canon camera on a copy stand: live positive preview, 
 
 Built on [CCAPI](https://developercommunity.usa.canon.com/), Canon's Camera Control API. No native dependencies, plain `pip install`.
 
-> **Status: works on a real camera.** Live-view streaming and capture were both fixed against real hardware. Colour inversion is still the v0.1 linear flip, so **colour negatives preview cyan**: the orange mask isn't neutralised yet. Black and white is fine. Captured files are never affected; inversion is preview-only.
+> **Status: works on a real camera.** Live-view streaming and capture were both fixed against real hardware. Colour inversion is still the v0.1 linear flip, so **colour negatives preview cyan**: the orange mask isn't neutralised yet, a known limitation with no scheduled fix. Black and white is fine. Captured files are never affected; inversion is preview-only.
 
 ## In use
 
@@ -76,7 +76,7 @@ python -m csfs.app.server           # the other
 
 <http://127.0.0.1:8000>, press **Connect**. **Capture** downloads a full-resolution file to `captures/`.
 
-`pytest` runs ≈250 tests, which start their own mock and need nothing else running.
+`pytest` runs 256 tests, which start their own mock and need nothing else running.
 
 ### Controls
 
@@ -166,7 +166,7 @@ src/csfs/
 ├── paths.py         Where things live, from a checkout and from a bundle
 └── tools/           dump_endpoints, check_liveview
 packaging/           PyInstaller build for the double-clickable app
-tests/               ≈250 tests, none needing a camera
+tests/               256 tests, none needing a camera
 ```
 
 The layering is load-bearing: it's what lets colour inversion be worked on with no camera attached.

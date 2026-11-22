@@ -40,8 +40,10 @@ macOS builds are unsigned, so Gatekeeper blocks them elsewhere. Locally, right-c
 A mock camera serves synthetic negatives (orange mask, rebate, grain) over the same API a real body uses. Use Python **3.10–3.13**.
 
 ```bash
-python3 -m venv .venv && source .venv/bin/activate    # Windows: .venv\Scripts\activate
+python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt -e .
+python -m csfs.mock.mock_server     # a fake camera, in one terminal
+python -m csfs.app.server           # the app, in another
 ```
 
 Then, in two terminals:
@@ -100,13 +102,17 @@ python -m csfs.tools.dump_endpoints    # verify
 
 **Grant Local Network permission or nothing connects.** macOS 15+ gates LAN access per app and the camera is a LAN device. If you miss the prompt, every call fails looking like a network fault; fix it in **System Settings → Privacy & Security → Local Network**. Activation may need a Windows machine, because Canon doesn't always ship a macOS build; the unlock is written *to the camera*, so either machine works.
 
-### If your camera names endpoints differently
+On connect it switches the camera to electronic shutter, single drive, one-shot AF and no auto
+power-off, and tells you it did. Set `capture.prepare_camera_for_scanning: false` to leave the
+camera alone.
 
 Nothing here hardcodes CCAPI paths. The app reads the endpoint inventory the camera publishes and matches it against hints in [`src/csfs/ccapi/endpoints.py`](src/csfs/ccapi/endpoints.py), the only file with path assumptions.
 
 If `dump_endpoints` reports a capability MISSING that your reference says you have, add the distinguishing path segment there. An honest MISSING is preferred: a capability bound to the wrong endpoint fails in hard-to-diagnose ways.
 
-## Hardware
+Nothing hardcodes CCAPI paths. The app reads the endpoint list the camera publishes and matches it
+against hints in `src/csfs/ccapi/endpoints.py`, since URLs change between models and firmware. If
+your body names something differently, that's the one file to edit.
 
 A CCAPI-capable Canon body (R7, R6 II, R10, R5, R6, RP, R3, 90D, 850D and others; check Canon's list). The R7 is the reference, but the code targets the API, not the model. Also a macro lens reaching ~1:1 (focus controls hide on a manual lens), plus copy stand, negative holder, and backlight (high-CRI for colour).
 
@@ -120,4 +126,5 @@ Keep the three layers decoupled and add tests for anything in `processing/`. **N
 
 ## Licence
 
-[MIT](LICENSE), covering **this project's code only**. Canon's CCAPI, activation tool and reference documentation are Canon's property under separate terms.
+[MIT](LICENSE), for this project's code. Canon's CCAPI, activation tool and documentation are
+Canon's, under their own terms.

@@ -45,3 +45,12 @@ Scharr gradient. Replacing it with Pillow and numpy took the app from 146 MB to
 **Canon's CCAPI reference and activation tool.** Licensed to you, not to
 whoever downloads this. The build fails if either is found in the output, and
 so is your own `config.yaml`, which holds your camera's address.
+
+## Scope
+
+This license covers the source code of Canon Smart Film Scanner only.
+
+Canon's Camera Control API (CCAPI), its activation tool, and its reference
+documentation are Canon's property and carry their own separate license terms.
+Nothing in this repository grants you any rights to them. Each user must obtain
+their own CCAPI access directly from Canon's Developer Community.

@@ -1,4 +1,4 @@
-# Canon Smart Film Scan -- runtime + dev dependencies
+# Canon Smart Film Scanner -- runtime + dev dependencies
 #
 # Deliberately small and mainstream. If you are adding a dependency, ask
 # whether a newcomer on Windows, macOS (Intel and Apple silicon) or Linux can
